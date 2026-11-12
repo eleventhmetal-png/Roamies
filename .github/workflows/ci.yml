@@ -1,10 +1,11 @@
 name: CI
 
+# custom: this build's integration branch (FORK.md); its feature branches come in as pull requests into it.
 on:
   push:
-    branches: [main]
+    branches: [main, custom]
   pull_request:
-    branches: [main]
+    branches: [main, custom]
 
 permissions:
   contents: read

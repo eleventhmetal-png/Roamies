@@ -22,7 +22,7 @@ What it adds to upstream:
 | `main` | Upstream as it is. Only ever fast-forwarded from `upstream/main`, never committed to directly. |
 | `custom` | The custom build: upstream plus everything above. Releases are tagged from here. |
 | `voice-provider-voicestudio` | The VoiceStudio and Ollama work as first written; also the head of an open pull request to upstream (#28). Kept for reference: since 0.1.35 upstream has its own versions. |
-| feature branches | One per upgrade, branched from `custom` and merged back after review. |
+| feature branches | One per upgrade, branched from `custom` and merged back through a pull request. `custom` requires the Linux, macOS and Windows checks to pass, and pull requests can merge themselves once they do (auto-merge). |
 
 ## Updates come only from this build
 
@@ -88,6 +88,8 @@ When the merge conflicts:
 - **`tauri.conf.json`:** keep this build's `plugins.updater` (endpoints and `pubkey`). Take upstream's other
   changes.
 - **`linux.rs`:** keep this repo in `open_releases_page`.
+- **`.github/workflows/ci.yml`:** keep `custom` in the `push` and `pull_request` branches, so this build's
+  branches are checked.
 - **`sidekick.mjs` / `panel.js`:** keep both sides. Upstream's features and this build's brain, voice and build
   lines live side by side.
 - **Upstream's version bump:** this build sets its own version when it releases.
