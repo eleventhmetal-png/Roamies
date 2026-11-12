@@ -9,6 +9,15 @@ What it adds to upstream:
 
 - **Ollama brain** (Model page → Brain → Ollama): local models with tool calling, and never a paid fallback.
 - **VoiceStudio voice provider** (Voice page): local text-to-speech, and never a fallback to Fish Audio.
+- **Reply depth and reasoning** (Model page → Replies, and the conversation window): Quick (a few spoken
+  sentences), Conversation (natural back and forth, with follow-up questions) or Work (research, analysis, drafting
+  and multi-step tasks at any length). In Work mode, a short summary is spoken and shown by her, and the full
+  answer goes to the conversation window. Reasoning is Off or one of the levels the current model supports.
+- **Conversation window** (Home → Conversation, Open Conversation… in the tray menu, or `roamies --convo`): the whole
+  conversation with copyable answers, links, tables and code; Stop; the steps of a longer task; History to search,
+  read and resume past conversations.
+- **Always visible** (Behavior page): she stays on screen when idle, at the spot she was last dragged to, remembered
+  between launches. Hiding her with the shortcut or Esc wins until you show her again. It never keeps the mic on.
 - **Its own updates** (below).
 
 ## Branches
