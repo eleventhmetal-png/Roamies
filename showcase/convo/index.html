@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Roamies Conversation</title>
+<link rel="stylesheet" href="../onboarding/onboarding.css">
+<link rel="stylesheet" href="convo.css">
+</head>
+<body>
+<div class="win">
+  <header class="bar">
+    <div class="title">
+      <h1 id="who">Conversation</h1>
+      <p class="model" id="model"></p>
+    </div>
+    <div class="top-btns">
+      <button class="px btn ghost mini" type="button" id="history-btn" aria-expanded="false" aria-controls="history">History</button>
+      <button class="px btn ghost mini" type="button" id="new-btn">New</button>
+    </div>
+  </header>
+  <div class="controls">
+    <div class="picks" role="radiogroup" aria-label="Reply depth" id="modes"></div>
+    <label class="reason">Reasoning
+      <span class="px field select"><select id="thinking" aria-label="Reasoning"></select></span>
+    </label>
+  </div>
+  <p class="mode-hint" id="mode-hint"></p>
+
+  <div class="viewing" id="viewing" hidden>
+    <span>A past conversation.</span>
+    <button class="link" type="button" id="resume-btn">Resume it</button>
+    <button class="link" type="button" id="back-btn">Back to the current one</button>
+  </div>
+
+  <main class="log" id="log" aria-live="polite" aria-label="Conversation" tabindex="0"></main>
+
+  <section class="work-progress" id="progress" hidden aria-label="Progress">
+    <p class="doing" id="doing"></p>
+    <ol class="steps" id="steps"></ol>
+  </section>
+
+  <form class="compose" id="compose">
+    <span class="px field grow"><textarea id="input" rows="2" placeholder="Message" aria-label="Message" maxlength="20000"></textarea></span>
+    <button class="px btn primary" type="button" id="send">Send</button>
+  </form>
+  <p class="note" id="note" role="status" hidden></p>
+
+  <aside class="history" id="history" hidden aria-label="Saved conversations">
+    <div class="h-head">
+      <span class="px field grow"><input id="search" type="search" placeholder="Search conversations" aria-label="Search conversations" spellcheck="false"></span>
+      <button class="px btn ghost mini" type="button" id="history-close" aria-label="Close history">Close</button>
+    </div>
+    <ul class="h-list" id="h-list"></ul>
+  </aside>
+</div>
+<script src="../roamies/markdown.js"></script>
+<script src="convo.js"></script>
+</body>
+</html>

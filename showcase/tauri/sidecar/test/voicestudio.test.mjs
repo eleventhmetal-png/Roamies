@@ -41,7 +41,7 @@ const base = `http://127.0.0.1:${server.address().port}`;
   api.mode = 'engine'; const e = await studioStatus({ base }); assert.equal(e.reason, 'engine'); assert.match(e.message, /not installed/);
   api.mode = 'other'; assert.equal((await studioStatus({ base })).reason, 'other', 'something else on the port is not VoiceStudio');
   const off = await studioStatus({ base: 'http://127.0.0.1:1' });
-  assert.equal(off.reason, 'offline'); assert.match(off.message, /Open VoiceStudio/);
+  assert.equal(off.reason, 'offline'); assert.match(off.message, /Run VoiceStudio first/);
   api.mode = 'ready';
 }
 server.close();
@@ -92,7 +92,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const { v, got } = run();
   v.open(); v.say('Hi.');
   FakeWS.last.onerror?.(); 
-  assert.equal(got.errors[0].reason, 'offline'); assert.equal(got.errors[0].heard, false); assert.match(got.errors[0].message, /Open VoiceStudio/);
+  assert.equal(got.errors[0].reason, 'offline'); assert.equal(got.errors[0].heard, false); assert.match(got.errors[0].message, /Run VoiceStudio first/);
 }
 { // Refused while starting up (close code 1008): "starting".
   const { v, got } = run();

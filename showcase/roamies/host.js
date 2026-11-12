@@ -71,7 +71,7 @@
   const field = document.createElement('input');
   Object.assign(field.style, { position: 'fixed', left: '0', top: '0', width: '1px', height: '1px', opacity: '0', pointerEvents: 'none' });
   // Its name is its look's (the sidecar's LOOKS).
-  const NAMES = { classic: 'Roamie', jarvis: 'JARVIS', anime: 'Anime Girl', sarah: 'Sarah', adrian: 'Adrian' };
+  const NAMES = { classic: 'Roamie', jarvis: 'JARVIS', anime: 'Anime Girl', sarah: 'Sarah', adrian: 'Adrian', rita: 'Rita X' };
   field.setAttribute('aria-label', 'Message for Roamie');
   field.autocomplete = 'off'; field.spellcheck = false;
   document.addEventListener('DOMContentLoaded', () => document.body.appendChild(field));
@@ -447,7 +447,13 @@
       // ⌃⌥S toggles; the menu's Show Sidekick only ever shows.
       const a = getAgent();
       if (m.show || !a.visible) { if (a.show({ summoned: true })) a.act('wave'); }
-      else a.hide();
+      else a.hide({ byUser: true }); // with Always visible on, she stays hidden until they show her again
+      return;
+    }
+    if (m.kind === 'presence') {
+      // Always visible, and where they last dropped her (fractions of this screen; the same spot on another one).
+      const s = m.spot && Number.isFinite(m.spot.x) && Number.isFinite(m.spot.y) ? [m.spot.x * innerWidth, m.spot.y * innerHeight] : null;
+      getAgent().setAlways(!!m.always, s);
       return;
     }
     if (m.kind === 'say') { if (!ask || ask.bar) getAgent().say(m.text, { mood: m.mood ?? null }); } // the field leaves the bubble free
@@ -472,18 +478,23 @@
     if (!a || !up()) return;
     if (ask) { finishAsk(null); return; }
     if (hearing) { hearing = false; send({ type: 'listen_cancel' }); return; }
-    if (responding || Roamie.voiceOut?.playing()) { send({ type: 'menu', id: 'stop' }); Roamie.voiceOut?.stop(); return; }
+    if (responding || Roamie.voiceOut?.playing()) { send({ type: 'menu', id: 'stop', via: 'esc' }); Roamie.voiceOut?.stop(); return; }
     // A drawing on screen: Esc takes it all away (and the sidecar forgets its parts).
     if (Roamie.ink?.busy) { Roamie.ink.clear({ all: true }); send({ type: 'ink_cleared' }); return; }
     if (Roamie.panel?.isOpen) Roamie.panel.close();
     endTalk(); listen?.close(); listen = null;
-    if (a.visible) a.hide();
+    if (a.visible) a.hide({ byUser: true });
   }
   let escUp = null;
   setInterval(() => {
     const on = up();
     if (on !== escUp) { escUp = on; invoke('esc_watch', { on }).catch(() => { escUp = null; }); }
   }, 150);
+
+  // Always visible: she stays away while they talk (macOS voice bars by the cursor), while a screen change settles,
+  // and while an answer is coming, then comes back by herself. A spot she's dropped on is saved for next time.
+  Roamie.holdAway = () => hearing || waveTurn || !!held || !!responding;
+  Roamie.onHomeDrop = (x, y) => send({ type: 'spot', x: +(x / innerWidth).toFixed(4), y: +(y / innerHeight).toFixed(4) });
 
   // Start hidden in auto mode and tell the brain we're listening. It replies with the sound setting,
   // and a greeting wave unless the setup guide is about to open.

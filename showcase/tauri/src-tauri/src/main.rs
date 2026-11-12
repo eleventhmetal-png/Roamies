@@ -35,6 +35,7 @@ static SIDEKICK_OVERLAY: Mutex<Option<String>> = Mutex::new(None);
 static ONBOARDING: AtomicBool = AtomicBool::new(false);
 const ONBOARDING_LABEL: &str = "onboarding";
 const PANEL_LABEL: &str = "panel";
+const CONVO_LABEL: &str = "conversation";
 /// When the panel last hid because it lost focus: a click on the icon that caused it mustn't reopen it.
 static PANEL_BLURRED: Mutex<Option<Instant>> = Mutex::new(None);
 /// Counts opens, so a close that's still playing its animation can tell it was opened again and stay up.
@@ -114,6 +115,83 @@ fn to_overlays(app: &AppHandle, msg: &Value) {
 fn to_panel(app: &AppHandle, msg: &Value) {
     if let Some(w) = app.get_webview_window(PANEL_LABEL) {
         let _ = w.eval(format!("window.__panel&&__panel({msg})"));
+    }
+}
+
+fn to_convo(app: &AppHandle, msg: &Value) {
+    if let Some(w) = app.get_webview_window(CONVO_LABEL) {
+        let _ = w.eval(format!("window.__convo&&__convo({msg})"));
+    }
+}
+
+/// The conversation window (convo/index.html): an ordinary window beside the companion, made on first use and
+/// hidden (not destroyed) when closed, so it opens again at once where it was. `focus`: bring it to the front and
+/// take the keyboard (asked for); without it, it shows behind what you're doing (a Work answer arriving).
+fn show_convo(app: &AppHandle, focus: bool) {
+    let w = match app.get_webview_window(CONVO_LABEL) {
+        Some(w) => w,
+        None => {
+            let b = WebviewWindowBuilder::new(app, CONVO_LABEL, WebviewUrl::App("convo/index.html".into()))
+                .title("Roamies Conversation")
+                .inner_size(560.0, 760.0)
+                .min_inner_size(380.0, 420.0)
+                .resizable(true)
+                .visible(false);
+            match b.build() {
+                Ok(w) => {
+                    let app2 = app.clone();
+                    let w2 = w.clone();
+                    w.on_window_event(move |e| {
+                        if let tauri::WindowEvent::CloseRequested { api, .. } = e {
+                            api.prevent_close();
+                            let _ = w2.hide();
+                            to_sidecar(&app2, &json!({ "type": "convo_closed" }));
+                        }
+                    });
+                    w
+                }
+                Err(e) => {
+                    eprintln!("conversation window failed to open: {e}");
+                    return;
+                }
+            }
+        }
+    };
+    let shown = w.is_visible().unwrap_or(false);
+    if !shown {
+        let _ = w.show();
+        // The page says it's open (convo_open) when it loads; a window shown again says so here.
+        let _ = w.eval("window.__convoShown&&__convoShown()");
+    }
+    if focus {
+        let _ = w.unminimize();
+        let _ = w.set_focus();
+        // Roamies has no Dock icon, so macOS won't make its window key from a plain focus request.
+        #[cfg(target_os = "macos")]
+        if let Ok(p) = w.ns_window() {
+            let p = p as usize;
+            let _ = app.run_on_main_thread(move || unsafe {
+                use objc2::runtime::{AnyObject, Bool};
+                use objc2::{class, msg_send};
+                let win = p as *mut AnyObject;
+                let _: () = msg_send![win, makeKeyAndOrderFront: std::ptr::null::<AnyObject>()];
+                let ns_app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
+                let _: () = msg_send![ns_app, activateIgnoringOtherApps: Bool::YES];
+            });
+        }
+    } else {
+        // A Work answer arriving: in front, where they'll see it, but without taking the keyboard or switching apps
+        // (they may be typing elsewhere). Roamies is an accessory app, so a plain order-front would leave it behind.
+        #[cfg(target_os = "macos")]
+        if let Ok(p) = w.ns_window() {
+            let p = p as usize;
+            let _ = app.run_on_main_thread(move || unsafe {
+                use objc2::runtime::AnyObject;
+                use objc2::msg_send;
+                let win = p as *mut AnyObject;
+                let _: () = msg_send![win, orderFrontRegardless];
+            });
+        }
     }
 }
 
@@ -466,9 +544,9 @@ async fn perm_request(kind: String) -> Value {
 #[tauri::command]
 fn open_settings(pane: String) {
     const PANES: [&str; 6] = ["Privacy_Microphone", "Privacy_SpeechRecognition", "Privacy_ScreenCapture", "Privacy_FilesAndFolders", "Privacy_AllFiles", "Privacy_Accessibility"];
-    if cfg!(windows) && pane == "privacy-microphone" {
-        // explorer hands ms-settings: links to the Settings app.
-        let _ = hide_console(&mut Command::new("explorer")).arg("ms-settings:privacy-microphone").spawn();
+    // explorer hands ms-settings: links to the Settings app. Taskbar: where Roamies' tray icon is switched on.
+    if cfg!(windows) && (pane == "privacy-microphone" || pane == "taskbar") {
+        let _ = hide_console(&mut Command::new("explorer")).arg(format!("ms-settings:{pane}")).spawn();
         return;
     }
     if !cfg!(target_os = "macos") || !PANES.contains(&pane.as_str()) {
@@ -1428,6 +1506,12 @@ fn handle_sidecar(app: &AppHandle, msg: Value) {
             }
         }
         Some("panel_show") => show_panel(app, None, false),
+        Some("convo") => {
+            if let Some(m) = msg.get("msg") {
+                to_convo(app, m);
+            }
+        }
+        Some("convo_show") => show_convo(app, msg.get("focus").and_then(Value::as_bool) != Some(false)),
         Some("diagnostics") => {
             let app = app.clone();
             thread::spawn(move || to_sidecar(&app, &diagnostics(&app)));
@@ -1523,19 +1607,25 @@ fn handle_sidecar(app: &AppHandle, msg: Value) {
 /// for binding to keys in the desktop's keyboard settings, the one kind of global shortcut Wayland lets every app
 /// have. None: a plain launch.
 fn cli_action(args: &[String]) -> Option<&'static str> {
-    const ACTIONS: [&str; 5] = ["summon", "list", "talk", "ask", "panel"];
+    const ACTIONS: [&str; 6] = ["summon", "list", "talk", "ask", "panel", "convo"];
     args.iter().skip(1).find_map(|a| ACTIONS.into_iter().find(|f| a.strip_prefix("--") == Some(*f)))
 }
 
 /// A second launch quit and handed its arguments over (the single-instance plugin). A plain one summons the
-/// Roamie; on Linux it opens the panel instead, since many desktops there show no tray icon to click.
+/// Roamie and, on Windows and Linux, opens the panel: Windows 11 hides a new tray icon behind the ^ arrow and many
+/// Linux desktops show none, so opening Roamies again from the Start menu or the app list is the way in.
 fn second_launch(app: &AppHandle, args: &[String]) {
     match cli_action(args) {
         Some("summon") => to_overlays(app, &json!({ "kind": "summon" })),
         Some("panel") => show_panel(app, None, false),
+        Some("convo") => show_convo(app, true),
         // The sidecar's to do: it knows whether voice is on and ready, and owns the ask bubble and the list.
         Some(action) => to_sidecar(app, &json!({ "type": "cli", "action": action })),
         None if cfg!(target_os = "linux") => show_panel(app, None, false),
+        None if cfg!(windows) => {
+            to_overlays(app, &json!({ "kind": "summon" }));
+            show_panel(app, None, false);
+        }
         None => to_overlays(app, &json!({ "kind": "summon" })),
     }
 }
@@ -1624,7 +1714,7 @@ mod tests {
     fn a_second_launch_says_what_it_wants_with_one_flag() {
         let args = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         assert_eq!(cli_action(&args(&["roamies"])), None, "a plain launch");
-        for f in ["summon", "list", "talk", "ask", "panel"] {
+        for f in ["summon", "list", "talk", "ask", "panel", "convo"] {
             assert_eq!(cli_action(&args(&["/usr/bin/roamies", &format!("--{f}")])), Some(f));
         }
         assert_eq!(cli_action(&args(&["roamies", "--verbose", "--talk"])), Some("talk"), "other arguments are skipped");
