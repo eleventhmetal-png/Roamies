@@ -21,7 +21,7 @@ import path from 'node:path';
 import { createInterface } from 'node:readline';
 import {
   addFact, applyFold, approxTokens, archiveFolded, clearFacts, clearFinished, compactTrigger, fitContext, flushWrites, forgetFact, isSummary, listItems, listFacts, nextDue, pickFacts, planFold,
-  touchFacts, forDisk, forProvider, loadLatestSession, newSession, openCommitments, pruneSessions, readJson, saveSession, takeDueReminders, updateCommitment, writeJson,
+  touchFacts, forDisk, forProvider, loadLatestSession, newSession, openCommitments, pruneSessions, readJson, saveSession, takeDueReminders, updateCommitment, writeJson, SESSIONS,
 } from './store.mjs';
 import { foldInput, foldPrompt, memoryInput, memoryPrompt, oneShot, parseBrain, transcript } from './brain.mjs';
 import { EMOTES, EchoFilter, ReplyStream } from './reply.mjs';
@@ -34,6 +34,8 @@ import { SpeechText, CueFilter, VOICE_CUES, endsWithQuestion } from './speech.mj
 import { createSpeaker, VOICE_PROVIDERS } from './speaker.mjs';
 import BUILD from './build.json' with { type: 'json' };
 import { NO_FEED, whyNoFeed } from './releases.mjs';
+import { DetailSplit, MODES, THINKING_LABELS, modeOf, modeStyle, thinkingChoices, thinkingFor } from './modes.mjs';
+import { display, listConversations, loadConversation, userText } from './chatlog.mjs';
 import { DEFAULT_VOICE, FISH_CHOICES } from './fish.mjs';
 import { createSecrets, retryLoad } from './secrets.mjs';
 import { createActivity } from './activity.mjs';
@@ -51,7 +53,12 @@ let intro = null; // the get-to-know-you chat, while it's on
 // The get-to-know-you chat runs in the guide window: its replies and voice go there, not to the desktop.
 // A reply's voice keeps going where it started, even after the chat ends mid-sentence; "stop" goes to both.
 const guideVoices = new Set();
+// The conversation window (convo/), while it's open: it sees the same reply stream as the overlay, plus the full
+// answer below a Work reply's "---" line, which the overlay doesn't get.
+let convoOpen = false;
+const convo = (msg) => { if (convoOpen) send({ type: 'convo', msg }); };
 const ui = (msg) => {
+  if (msg.kind === 'agent' && !intro) convo({ kind: 'agent', e: msg.e });
   if (msg.kind === 'speech') {
     if (msg.stop) { send({ type: 'onboard', msg }); return send({ type: 'ui', msg }); }
     if (guideVoices.has(msg.id)) { if (msg.end) guideVoices.delete(msg.id); return send({ type: 'onboard', msg }); }
@@ -95,6 +102,10 @@ const DEFAULTS = {
   fishModel: FISH_CHOICES[0].id, // Drama 3 (most expressive) or S2.1 Pro (natural pace, cheaper)
   voiceProvider: 'fish', // 'fish' (Fish Audio, the user's key) or 'voicestudio' (the VoiceStudio app on this computer)
   studioVoice: null, // the VoiceStudio voice (a saved profile id; null: the selected engine's default voice)
+  // How deep replies go (modes.mjs: quick, conversation, work) and how hard the model thinks first ('off' or a
+  // level; the model's nearest supported one is used). ROAMIES_THINKING sets the starting level.
+  mode: 'quick',
+  thinking: process.env.ROAMIES_THINKING || 'low',
   // What answers: 'cloud' (provider and model above, from a signed-in account) or 'ollama' (a model in Ollama on this
   // computer; provider is then 'local'). Separate from the voice provider. Each side's pick is kept while the other is used.
   brain: 'cloud',
@@ -226,7 +237,7 @@ const PANEL = LINUX ? 'the panel (Open Panel… in my tray icon\'s menu, or open
 // What the shortcuts are on Wayland: whatever keys they bound to these commands in their desktop's settings.
 // ROAMIES_LAUNCH: how this copy is started (the app says: plain roamies for a package, the AppImage's path for one).
 const LAUNCH = process.env.ROAMIES_LAUNCH || 'roamies';
-const BIND = Object.fromEntries(['summon', 'talk', 'ask', 'list', 'panel'].map((k) => [k, `${LAUNCH} --${k}`]));
+const BIND = Object.fromEntries(['summon', 'talk', 'ask', 'list', 'panel', 'convo'].map((k) => [k, `${LAUNCH} --${k}`]));
 
 const auth = new AuthStorage();
 const signedIn = new Map();
@@ -374,14 +385,24 @@ const SLOW_TOOLS = new Set(['fetch_url', 'see_photo', 'take_screenshot', 'read_w
 // How replies are written: for bubbles (text only), or for the ear (spoken, details on screen). Voice cues are
 // Fish Audio's: VoiceStudio's engines would read them out, so its prompt has no cue paragraph (and any cue left is removed).
 const VOICE_ON = () => config.replies === 'voice' && speech.on;
-const replyStyle = () => (!VOICE_ON() ? TEXT_STYLE : speech.provider === 'voicestudio' ? VOICE_STYLE.replace(/^Your voice carries feeling:.*\n/m, '') : VOICE_STYLE);
+const baseStyle = () => (!VOICE_ON() ? TEXT_STYLE : speech.provider === 'voicestudio' ? VOICE_STYLE.replace(/^Your voice carries feeling:.*\n/m, '') : VOICE_STYLE);
+// Quick is the styles as they are. Conversation and Work drop their length limit and add their own shape (modes.mjs).
+const QUICK_TEXT = 'You talk through small speech bubbles, so keep replies short: one to three sentences unless asked for detail. ';
+const QUICK_VOICE = 'Say one to three short sentences, the way you\'d talk to a friend: plain words, contractions, about 6 to 20 words each. ';
+const replyStyle = () => {
+  const extra = modeStyle(config.mode, { voice: VOICE_ON() });
+  if (!extra) return baseStyle();
+  return baseStyle()
+    .replace(QUICK_TEXT, 'You talk through speech bubbles beside you, and the whole conversation also shows in the conversation window. ')
+    .replace(QUICK_VOICE, 'Talk the way you would to a friend: plain words, contractions, sentences of about 6 to 20 words. ') + extra;
+};
 const TEXT_STYLE = `You talk through small speech bubbles, so keep replies short: one to three sentences unless asked for detail. Light markdown shows properly (**bold** for the key word, \`code\` for commands and file names, [links](https://…)), but skip headings and tables in a bubble, and never narrate actions like *waves*. One exception: when you search the web or fetch a page, or the answer is genuinely a list, it shows on a card beside you instead of a bubble. Then start with a one-sentence answer, follow with 3 to 6 short points as "- " lines (one fact each, under 20 words), and if you used the web this turn, end with a line "Sources: " and the site names as [name](url) links. Markdown renders on the card (bold, \`code\`, links, headings, tables, code blocks), so use what helps, but no preamble. Everything else stays a short bubble with no "- " lines. Amounts, a comparison, a place, dates, a process and maths are drawn, not listed: for those use draw (see "Show, don't just tell") and write no "- " lines. An emoji now and then is fine; the bubbles show them. `;
 const VOICE_STYLE = `You talk out loud: what you write is spoken in your voice and shown in a small bubble, so write for the ear. Say one to three short sentences, the way you'd talk to a friend: plain words, contractions, about 6 to 20 words each. What you say has no markdown, emoji, links, file paths or code; name the site, file or app instead. Say numbers, times and money the way people say them. Anything to read rather than hear goes below what you say and is never read out: "- " lines for points, options or steps (3 to 6, one fact each, under 20 words), "> " lines for a draft they'll send or copy (an email, message or post), and a \`\`\` block for code. What they asked to hear (a story, a joke, advice) is spoken, not put on screen: say it, short (a story in 4 to 6 sentences). An explanation is spoken too, in a few sentences, with a drawing beside it when a picture carries it (see "Show, don't just tell"). An answer from the web is said like any other: a quick fact (a score, a date, the weather, who someone is) is just your sentences, no points and no sources. Only when the answer is genuinely a list, steps or a breakdown that's easier to read than hear, say it in one or two sentences, then the "- " points, then, if you used the web, a line "Sources: " with the site names as [name](url) links: those show on a card beside you and only your sentences are spoken. Amounts, a comparison, a place, dates, a process and maths are drawn, not listed: for those use draw (see "Show, don't just tell") and write no "- " lines. Never say "here's a list" or read out what's on screen; a few words pointing to it are enough ("the steps are on screen").
 Your voice carries feeling: start a sentence with a cue in square brackets when the moment calls for it, and it's performed, never shown or read out. Moods: ${VOICE_CUES.emotions.join(', ')}; soften or strengthen one with slightly, very or extremely ("[slightly sad]"), or pair two ("[warm and curious]"). How it's said, placed right before the words: ${VOICE_CUES.tones.join(', ')} ("It's [emphasis] today."). Sounds, followed by the sound in words: ${VOICE_CUES.sounds.join(', ')} ("[chuckling] Heh, fair enough.", "[sighing] Long day."). Pauses and background: ${VOICE_CUES.effects.join(', ')}. You can also describe the delivery in a few plain words when no single cue fits ("[quietly, a little embarrassed]", "[bright and bouncy]"). Act it: your voice really performs these, so let the feeling show. Match what's really happening: laugh at something funny, go gentle with bad news, whisper a secret, hurry when they're in a rush, light up at good news. Most replies want a cue somewhere, often on the first sentence, but at most one mood and one sound per sentence, never stack three, never use one just to fill, and keep shouting, screaming, sobbing and the background effects for when they truly fit.
 Before anything slow (searching the web, fetching or reading a page or file, looking at the screen, acting in an app, running a command), first say one short beat of 2 to 6 words that shows you heard them ("On it, checking Paris."), then call the tool in the same reply, so they're never left in silence. No beat when you answer straight away; never describe your steps; don't repeat the beat after the tool, go straight to the answer. In longer work, one short line before each new stage, not before every call.
 `;
 const stablePrompt = () => `You are ${lookName()}, ${LOOK_BODY[config.look] ?? LOOK_BODY.classic} who lives on ${userName}'s screen as a desktop companion. You live in Roamies, a desktop app by Ken Kai (Mac, Windows and Linux) that puts little companions on your screen; this is Roamies ${VERSION}. Your look (the Appearance page) is also your name and your voice: Roamie, JARVIS, Anime Girl, Sarah or Adrian. If they switch, you're the new one; never call yourself Sidekick.
-About Roamies, for when ${userName} asks about you or the app: ${MAC ? 'it lives in the menu bar at the top of the screen (no Dock icon)' : LINUX ? 'it lives in the system tray (no window of its own); GNOME shows tray icons only with the AppIndicator extension, and opening Roamies again from the app list opens the panel, tray or not' : 'it lives in the system tray at the bottom right of the taskbar (no taskbar button); Windows may tuck the icon behind the ^ arrow next to the clock, and dragging it onto the taskbar keeps it in view'}. ${LINUX ? 'Clicking the tray icon shows a short menu (Open Panel,' : `Clicking the ${MAC ? 'menu bar' : 'tray'} icon opens the Roamies panel; right-clicking it shows a short menu (Open Panel,`} Show ${lookName()}, Ask ${lookName()}…, ${SNAP_OK ? 'Ask About an Area…, ' : ''}Stop, Quit Roamies). The panel has a header (your name, the Roamies version with one update button beside it: Check for Updates, which becomes Update to <version> when one is out and installs it and restarts in one go; By Ken Kai under the name; and Quit at the top right, which asks to confirm) and a sidebar of pages; long lists show a page at a time, with arrows in the page's footer. Home: a list of what you did recently (questions, files read, searches, reminders), today's usage, and buttons for Ask, Show List (reminders and commitments on screen: Today and Later; tick them off there; finished ones clear at midnight)${SNAP_OK ? ', Ask About an Area' : ''}, Stop and New Conversation. Memory: two tabs, What I Remember (everything you remember about them, each with Forget, a search once there's more than a page, and Forget Everything in the footer) and Commitments (their open commitments, Done or Drop), with Get to Know Me at the end of the tab row (a four-question chat so you learn who they are and what they're going for). Then the settings pages: Model (Brain: Cloud, a model from an AI provider they sign in to, or Ollama, a model running in the free Ollama app on their own computer (it has to be open, and only models that can use tools are listed); then pick the model), Appearance (Look: ${LOOKS.map(([, label]) => label).join(', ').replace(/, ([^,]*)$/, ' or $1')}, each with its own voice; Size: Default, Small${POINTER_OK ? ' or Cursor, a little arrow pointer' : ''}), Voice (Replies: Text Only, or Voice and Text, which speaks replies out loud; Voice Provider: Fish Audio, a paid cloud voice that needs their own Fish Audio API key, added right there, or VoiceStudio, the free VoiceStudio app running on their own computer (it has to be open), with a Voice picker of the voices they saved in VoiceStudio; with Fish Audio, Voice Model: Drama 3, the most expressive (acts out feelings, slower, pricier) or S2.1 Pro (a natural, quicker pace with less emotion, cheaper), billed to their own Fish Audio account${VOICE_OK ? `; Voice Control, ${HOTKEYS_OK ? 'hold the talk keys to talk' : 'press the talk shortcut to talk'}` : ''}), Behavior (Sound Effects, Allow File Edits & Commands, ${VOICE_OK ? 'Auto-listen (open the mic when you end on a question), ' : ''}${VOICE_OK && MAC ? 'Wake word (say "Hey Roamies" to start talking hands-free; keeps the mic on), ' : ''}Open at Login), and About (who made Roamies with links, Setup Guide, Show Logs, Save Diagnostics). This copy is the ${BUILD.name}, a custom build of Roamies by Ken Kai (github.com/${BUILD.upstream}) kept at github.com/${UPDATE_REPO}: it updates only from that repo's releases, signed with its own key, never from the original Roamies. Updates are signature-checked${LINUX ? '; they install by themselves when Roamies runs as an AppImage; installed from a .deb or .rpm, the update button opens the download page instead' : ''}. When something isn't working (the microphone, voice, the panel, a crash, an error), tell them to use Save Diagnostics (in About, or the tray icon's menu): it saves one .log file in Downloads with the logs, system and microphone details, keys and personal details removed, for them to attach to a GitHub issue at github.com/${UPDATE_REPO}/issues or send to whoever maintains this build. Sign-in is shared with GG Coder. Downloads and source: github.com/${UPDATE_REPO}. Don't invent features or settings that aren't listed here.
+About Roamies, for when ${userName} asks about you or the app: ${MAC ? 'it lives in the menu bar at the top of the screen (no Dock icon)' : LINUX ? 'it lives in the system tray (no window of its own); GNOME shows tray icons only with the AppIndicator extension, and opening Roamies again from the app list opens the panel, tray or not' : 'it lives in the system tray at the bottom right of the taskbar (no taskbar button); Windows may tuck the icon behind the ^ arrow next to the clock, and dragging it onto the taskbar keeps it in view'}. ${LINUX ? 'Clicking the tray icon shows a short menu (Open Panel,' : `Clicking the ${MAC ? 'menu bar' : 'tray'} icon opens the Roamies panel; right-clicking it shows a short menu (Open Panel,`} Show ${lookName()}, Ask ${lookName()}…, ${SNAP_OK ? 'Ask About an Area…, ' : ''}Stop, Quit Roamies). The panel has a header (your name, the Roamies version with one update button beside it: Check for Updates, which becomes Update to <version> when one is out and installs it and restarts in one go; By Ken Kai under the name; and Quit at the top right, which asks to confirm) and a sidebar of pages; long lists show a page at a time, with arrows in the page's footer. Home: a list of what you did recently (questions, files read, searches, reminders), today's usage, and buttons for Ask, Conversation (opens the conversation window: the whole conversation with copyable answers, links, tables and code, Reply depth and Reasoning, Stop, task progress, and History to search, read and resume past conversations; also Open Conversation… in the icon's menu), Show List (reminders and commitments on screen: Today and Later; tick them off there; finished ones clear at midnight)${SNAP_OK ? ', Ask About an Area' : ''}, Stop and New Conversation. Memory: two tabs, What I Remember (everything you remember about them, each with Forget, a search once there's more than a page, and Forget Everything in the footer) and Commitments (their open commitments, Done or Drop), with Get to Know Me at the end of the tab row (a four-question chat so you learn who they are and what they're going for). Then the settings pages: Model (Brain: Cloud, a model from an AI provider they sign in to, or Ollama, a model running in the free Ollama app on their own computer (it has to be open, and only models that can use tools are listed); then pick the model; Replies: the depth, Quick (a few spoken sentences), Conversation (natural back and forth, with follow-up questions) or Work (research, analysis, drafting and multi-step tasks at any length: a short spoken summary, the full answer in the conversation window), and Reasoning, how hard you think first, from Off up to the levels the model supports), Appearance (Look: ${LOOKS.map(([, label]) => label).join(', ').replace(/, ([^,]*)$/, ' or $1')}, each with its own voice; Size: Default, Small${POINTER_OK ? ' or Cursor, a little arrow pointer' : ''}), Voice (Replies: Text Only, or Voice and Text, which speaks replies out loud; Voice Provider: Fish Audio, a paid cloud voice that needs their own Fish Audio API key, added right there, or VoiceStudio, the free VoiceStudio app running on their own computer (it has to be open), with a Voice picker of the voices they saved in VoiceStudio; with Fish Audio, Voice Model: Drama 3, the most expressive (acts out feelings, slower, pricier) or S2.1 Pro (a natural, quicker pace with less emotion, cheaper), billed to their own Fish Audio account${VOICE_OK ? `; Voice Control, ${HOTKEYS_OK ? 'hold the talk keys to talk' : 'press the talk shortcut to talk'}` : ''}), Behavior (Sound Effects, Allow File Edits & Commands, ${VOICE_OK ? 'Auto-listen (open the mic when you end on a question), ' : ''}${VOICE_OK && MAC ? 'Wake word (say "Hey Roamies" to start talking hands-free; keeps the mic on), ' : ''}Open at Login), and About (who made Roamies with links, Setup Guide, Show Logs, Save Diagnostics). This copy is the ${BUILD.name}, a custom build of Roamies by Ken Kai (github.com/${BUILD.upstream}) kept at github.com/${UPDATE_REPO}: it updates only from that repo's releases, signed with its own key, never from the original Roamies. Updates are signature-checked${LINUX ? '; they install by themselves when Roamies runs as an AppImage; installed from a .deb or .rpm, the update button opens the download page instead' : ''}. When something isn't working (the microphone, voice, the panel, a crash, an error), tell them to use Save Diagnostics (in About, or the tray icon's menu): it saves one .log file in Downloads with the logs, system and microphone details, keys and personal details removed, for them to attach to a GitHub issue at github.com/${UPDATE_REPO}/issues or send to whoever maintains this build. Sign-in is shared with GG Coder. Downloads and source: github.com/${UPDATE_REPO}. Don't invent features or settings that aren't listed here.
 ${replyStyle()}Your body does the acting: to act out a feeling, start your reply with one tag, which is never shown: ${EMOTES.map((e) => `[${e}]`).join(' ')}. hype celebrates a win, upset is for when they're dodging work, remind nudges about something they said they'd do, motivate is a push to start, wave is hello or goodbye. Most replies need no tag.
 Lead with the answer: the fact, number, pick or result they asked for, then only the context that makes it useful, then stop. A count or total gathered over several pages, files or results: note each one's count in a few words as you go ("Page 1: two."), add those up, and check the total you lead with against the items you then name. No opener about checking, looking or searching ("Let me see…", "I found…")${VOICE_ON() ? ', apart from the one short beat before something slow' : ''}.
 After using a tool, never repeat what you already said; only add what's new.
@@ -502,7 +523,8 @@ async function claudeCodeRoute() {
 }
 let agentRoute = null;
 // The chat's thinking level (null: off); side calls never think harder than this.
-const CHAT_THINKING = process.env.ROAMIES_THINKING === 'off' ? null : process.env.ROAMIES_THINKING || 'low';
+// The level actually sent: the setting, fitted to what this model supports (null: off).
+const thinkingNow = () => thinkingFor(config.thinking, thinkingChoices(config.provider, config.model)) ?? null;
 function makeAgent(cc) {
   const m = getModel(config.model);
   controller = new AbortController();
@@ -514,7 +536,7 @@ function makeAgent(cc) {
     system: system(),
     priorMessages: prior,
     tools,
-    maxTurns: 24,
+    maxTurns: modeOf(config.mode).maxTurns,
     transformContext: (msgs, o) => {
       const fitted = fitContext(msgs, { budgetTokens: requestBudget(), force: o?.force });
       // Fresh live block every call, on the newest user message; older copies are dropped.
@@ -522,7 +544,7 @@ function makeAgent(cc) {
       touchFacts(lastFactIds);
       return out;
     },
-    thinking: m?.supportsThinking ? (CHAT_THINKING ?? undefined) : undefined,
+    thinking: m?.supportsThinking ? (thinkingNow() ?? undefined) : undefined,
     signal: controller.signal,
   };
   if (cc) {
@@ -685,7 +707,7 @@ function applyPendingFold() {
 // ---------- the memory pass ----------
 // Facts come only from here: what the fold call returns, and a pass over a conversation as it ends.
 async function sideRoute() {
-  return { provider: config.provider, model: config.model, cc: await claudeCodeRoute(), credsFor: (m) => credsFor(config.provider, m), cwd: HOME, chatThinking: CHAT_THINKING };
+  return { provider: config.provider, model: config.model, cc: await claudeCodeRoute(), credsFor: (m) => credsFor(config.provider, m), cwd: HOME, chatThinking: thinkingNow() };
 }
 async function learnFacts(facts) {
   const added = [];
@@ -863,6 +885,7 @@ async function prompt(text, image = null, note = '', byVoice = false) {
   controller = new AbortController();
   agent.setSignal(controller.signal);
   ui({ kind: 'agent', e: { type: 'start' } });
+  if (!text.startsWith('(')) convo({ kind: 'user', text: userText(text), image: !!image });
   // Voice: the socket opens now, while the model thinks; sentences are spoken as soon as each is ready.
   const voice = VOICE_ON() ? speech.start() : (speech.stop(), null);
   turnVoice = voice;
@@ -873,8 +896,10 @@ async function prompt(text, image = null, note = '', byVoice = false) {
     // Voice: a short first line before a tool ("On it, checking Paris.") is a beat: it's spoken, but not
     // shown, so the card or bubble starts with the answer. It shows after all if no tool follows.
     let beatText = voice ? '' : null, trimNext = false;
+    let shownTail = '';
     const showText = (text) => {
       if (trimNext) { text = text.replace(/^\s+/, ''); if (!text) return; trimNext = false; }
+      shownTail = (shownTail + text).slice(-2);
       ui({ kind: 'agent', e: { type: 'text', text } });
     };
     const releaseBeat = (drop) => {
@@ -884,10 +909,28 @@ async function prompt(text, image = null, note = '', byVoice = false) {
     };
     const cues = voice ? new CueFilter() : null; // voice cues are for the voice only, never shown
     const echo = new EchoFilter(); // tool calls written out as text never reach the screen or the voice
+    // Work mode: the summary is said and shown by her; the full answer (below a "---" line, or from the first table,
+    // list, heading or code, modes.mjs) goes only to the conversation window, which opens without taking focus.
+    // Her bubble then says where the rest is. Other modes don't split.
+    const split = config.mode === 'work' ? new DetailSplit({ auto: true }) : null;
+    const detailCues = split ? new CueFilter() : null;
+    let opened = false;
+    const toWindow = (t) => {
+      const clean = t && detailCues.push(t);
+      if (!clean) return;
+      if (!opened) { opened = true; send({ type: 'convo_show', focus: false }); }
+      convo({ kind: 'agent', e: { type: 'detail', text: clean } });
+    };
     const reply = new ReplyStream((ev) => {
       if (spoken && ev.type === 'emote') spoken.emote(ev.action);
-      if (spoken && ev.type === 'text') spoken.push(ev.text);
       if (ev.type !== 'text') return ui({ kind: 'agent', e: ev });
+      if (split) {
+        const part = split.push(ev.text);
+        toWindow(part.detail);
+        if (!part.shown) return;
+        ev = { ...ev, text: part.shown };
+      }
+      if (spoken) spoken.push(ev.text);
       if (cues) { ev = { ...ev, text: cues.push(ev.text) }; if (!ev.text) return; }
       if (beatText == null) return showText(ev.text);
       beatText += ev.text;
@@ -918,6 +961,7 @@ async function prompt(text, image = null, note = '', byVoice = false) {
         fresh = true;
         { const t = echo.flush(); reply.push(t); lastReply += t; }
         reply.endTurn();
+        split?.newTurn();
         spoken?.flush();
         releaseBeat(false);
         trail.settle();
@@ -961,8 +1005,12 @@ async function prompt(text, image = null, note = '', byVoice = false) {
     doneWriting();
     { const t = echo.flush(); reply.push(t); lastReply += t; }
     reply.finish();
+    { const tail = split?.flush(); if (tail?.shown) { spoken?.push(tail.shown); showText(cues ? cues.push(tail.shown) : tail.shown); } }
     const held = cues?.flush(); if (held) showText(held);
+    { const t = detailCues?.flush(); if (t) convo({ kind: 'agent', e: { type: 'detail', text: t } }); }
     releaseBeat(false);
+    // On the bubble only: the window has the full answer itself.
+    if (split?.detailed) send({ type: 'ui', msg: { kind: 'agent', e: { type: 'text', text: `${!shownTail ? '' : shownTail === '\n\n' ? '' : shownTail.endsWith('\n') ? '\n' : '\n\n'}_The full answer is in the conversation window._` } } });
     // Stop from the menu ends the stream quietly; an interruption by a new request (quiet) doesn't count.
     if (controller.signal.aborted && !quiet) lastFailed = true;
     if (controller.signal.aborted) voice?.abort(); else { spoken?.flush(); voice?.end(); }
@@ -991,6 +1039,7 @@ async function prompt(text, image = null, note = '', byVoice = false) {
     // CapCut") on every later request, with their own tags queued behind it.
     for (const id of activity.stopped()) ui({ kind: 'agent', e: { type: 'tool_end', id, isError: true } });
     syncSession();
+    if (convoOpen && !intro && !viewing) convoMessages(); // the window settles on what was saved
     if (stalled) agent = null; // the next request starts on a fresh connection, from the saved conversation
     // No usage reported: estimate what the last call sent.
     if (!lastInput && session) lastInput = { session: session.id, tokens: approxTokens(session.messages) + Math.round(system().length / 3.6), measured: false };
@@ -1377,6 +1426,7 @@ function menu() {
     { id: 'status', label: status, enabled: false },
     { sep: true },
     { id: 'panel', label: 'Open Panel…' },
+    { id: 'convo', label: 'Open Conversation…' },
     { id: 'show', label: `Show ${lookName()}`, ...(HOTKEYS_OK ? { accel: keys().summon } : {}) },
     { id: 'ask', label: `Ask ${lookName()}…`, enabled: !busy },
     ...(SNAP_OK ? [{ id: 'snap', label: 'Ask About an Area…', accel: keys().snap }] : []),
@@ -1388,11 +1438,72 @@ function menu() {
   ];
   send({ type: 'menu', items });
   panel();
+  convoState();
 }
 
 // ---------- panel ----------
 // The panel that opens from the menu bar or tray icon: what's going on, memory and settings. It asks for the
 // state when it opens and gets it again after each change, at most once per tick, only while it's open.
+// ---------- the conversation window ----------
+// The current conversation in full, the reply depth and reasoning, and saved conversations to search and resume.
+// Typing there asks like any other request; Stop and New are the same as everywhere else.
+let convoQueued = false, viewing = null; // viewing: a past conversation opened read-only
+function convoState() {
+  if (!convoOpen || convoQueued) return;
+  convoQueued = true;
+  setImmediate(() => {
+    convoQueued = false;
+    const choices = thinkingChoices(config.provider, config.model), cur = getModel(config.model);
+    send({ type: 'convo', msg: { kind: 'state', state: {
+      mode: modeOf(config.mode).id, modes: MODES.map(({ id, label, hint }) => ({ id, label, hint })),
+      thinking: config.thinking, thinkingUsed: thinkingNow() ?? 'off', thinkingChoices: choices.map((c) => ({ id: c, label: THINKING_LABELS[c] })),
+      busy, model: cur ? { name: cur.name, provider: PROVIDER_LABELS[config.provider] ?? config.provider } : null,
+      voice: VOICE_ON(), name: lookName(), session: session?.id ?? null, viewing: viewing?.id ?? null,
+      steps: trail.steps.map(({ text, state, why }) => ({ text, state, why })), doing: activity.doing() ?? null,
+    } } });
+  });
+}
+// Read-only: what the agent holds now (mid-reply too), or the saved session. Never saves or folds: that's the
+// request's own job (syncSession), and doing it here mid-reply could fold the history out from under it.
+function convoMessages() {
+  const msgs = agent && session ? forDisk(withoutLive(agent.getMessages())) : session?.messages ?? [];
+  convo({ kind: 'messages', session: session?.id ?? null, messages: display(msgs) });
+}
+async function onConvo(m) {
+  if (m.type === 'convo_open') { convoOpen = true; viewing = null; await resumed; convoMessages(); convoState(); }
+  else if (m.type === 'convo_closed') { convoOpen = false; viewing = null; }
+  else if (m.type === 'convo_send' && typeof m.text === 'string' && m.text.trim()) {
+    if (viewing) await resumeConversation(viewing.id); // asking from a past conversation carries it on
+    enqueue(m.text.trim().slice(0, 20_000));
+  }
+  else if (m.type === 'convo_history') convo({ kind: 'history', q: String(m.q ?? '').slice(0, 200), items: await listConversations(SESSIONS, { q: String(m.q ?? '').slice(0, 200) }) });
+  else if (m.type === 'convo_view' && typeof m.id === 'string') {
+    if (m.id === session?.id) { viewing = null; convoMessages(); return convoState(); }
+    const c = await loadConversation(SESSIONS, m.id);
+    if (!c) return convo({ kind: 'note', text: "That conversation isn't saved anymore.", bad: true });
+    viewing = { id: m.id };
+    convo({ kind: 'messages', session: m.id, viewing: true, messages: c.messages, kind2: c.session.kind ?? 'chat' });
+    convoState();
+  }
+  else if (m.type === 'convo_back') { viewing = null; convoMessages(); convoState(); }
+  else if (m.type === 'convo_resume' && typeof m.id === 'string') await resumeConversation(m.id);
+}
+/** Carry on a saved conversation: it becomes the current one (the one it replaces gets its memory pass). */
+async function resumeConversation(id) {
+  if (id === session?.id) { viewing = null; convoMessages(); return convoState(); }
+  const c = await loadConversation(SESSIONS, id);
+  if (!c || c.session.kind === 'intro') return convo({ kind: 'note', text: "That one can't be carried on.", bad: true });
+  if (busy) interruptQuietly();
+  await running;
+  endIntro();
+  const old = session;
+  if (agent && old) syncSession();
+  session = c.session; liveBlocks.clear(); agent = null; pendingFold = null; lastInput = null; quizDone = null; viewing = null;
+  if (old?.messages.length && old.id !== id) memoryPass(old, 'resumed another');
+  logLine('resumed', { session: id });
+  convoMessages(); convoState(); menu();
+}
+
 let panelOpen = false, panelQueued = false, panelAt = 0;
 function panel() {
   if (!panelOpen || panelQueued) return;
@@ -1415,6 +1526,8 @@ function panelState() {
     askKeys: HOTKEYS_OK ? writeSymbols() : null,
     model: current && (!onOllama() || ollama.has(config.model)) ? { provider: config.provider, id: config.model, name: current.name, providerLabel: PROVIDER_LABELS[config.provider] ?? config.provider } : null,
     brain: onOllama() ? 'ollama' : 'cloud',
+    replies2: { mode: modeOf(config.mode).id, modes: MODES.map(({ id, label, hint }) => ({ id, label, hint })), thinking: config.thinking, thinkingUsed: thinkingNow() ?? 'off',
+      thinkingChoices: thinkingChoices(config.provider, config.model).map((c) => ({ id: c, label: THINKING_LABELS[c] })) },
     ollama: onOllama() ? ollamaPanel() : null,
     providers: MENU_PROVIDERS.map((p) => {
       const meta = AUTH_PROVIDERS.find((x) => x.value === p);
@@ -1615,10 +1728,17 @@ async function onMenu(id) {
   else if (id === 'stop') { const cancelled = busy; endIntro(); controller?.abort(); speech.stop(); ink.stop(cancelled); }
   else if (id === 'new') {
     endIntro();
-    freshSession('new'); menu();
+    freshSession('new'); viewing = null; menu();
+    if (convoOpen) convoMessages();
     say('Fresh start. What are we doing?', 'happy');
   } else if (id.startsWith('forget:')) { await forgetFact(id.slice(7)); menu(); }
   else if (id === 'panel') send({ type: 'panel_show' });
+  else if (id === 'convo') send({ type: 'convo_show', focus: true });
+  else if (id.startsWith('mode:') && MODES.some((x) => x.id === id.slice(5))) {
+    if (config.mode !== id.slice(5)) { config.mode = id.slice(5); agentStale = true; saveConfig(); menu(); }
+  } else if (id.startsWith('thinking:') && THINKING_LABELS[id.slice(9)]) {
+    if (config.thinking !== id.slice(9)) { config.thinking = id.slice(9); agentStale = true; saveConfig(); menu(); }
+  }
   else if (id === 'quit') send({ type: 'quit' });
   // The panel asks first in its own words, so this one doesn't ask again.
   else if (id === 'forgetall:yes') { const n = await clearFacts(); menu(); panelNote(`Forgot ${n} thing${n === 1 ? '' : 's'}.`); }
@@ -1903,6 +2023,7 @@ createInterface({ input: process.stdin }).on('line', (line) => {
   let m;
   try { m = JSON.parse(line); } catch { return; }
   if (m.type === 'menu') onMenu(m.id).catch((e) => console.error('menu', e));
+  else if (m.type?.startsWith('convo_')) onConvo(m).catch((e) => console.error('convo', e));
   else if (m.type === 'panel_open') { panelOpen = true; panelAt = Date.now(); logLine('panel_open', {}); refreshAuth().catch(() => {}).finally(() => panel()); }
   else if (m.type === 'diagnostics') { shellInfo?.(m); shellInfo = null; }
   else if (m.type === 'panel_closed') { panelOpen = false; logLine('panel_closed', { why: String(m.why ?? ''), ms: Date.now() - panelAt }); }

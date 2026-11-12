@@ -2,10 +2,14 @@
 // picks out the spoken part a sentence at a time, so speech can start before the reply is finished:
 // - prose is spoken; list lines ("- ", "1. "), quotes ("> ", drafts), headings, tables, code blocks and the
 //   "Sources:" line are for the screen only (lists and drafts show on screen, never read out).
+// - a line of just "---" ends what's said: the rest of the reply is the full answer, shown in the conversation
+//   window (Work mode: a spoken summary, then the details).
 // - markdown, links, URLs, emoji, file paths and long code are dropped from what's said.
 const SENTENCE_END = /[.!?…]+["'”’)\]]*(?=\s)/g;
 const SCREEN_ONLY = /^\s*(?:[-*•+]\s|\d{1,2}[.)]\s|>|#{1,6}\s|\||sources?\s*:)/i;
-const LONG = 220; // speak a run-on sentence in pieces rather than wait for its end
+const LONG = 220;
+// Where the spoken summary ends and the written detail begins.
+export const DETAIL_RULE = /^-{3,}\s*$/; // speak a run-on sentence in pieces rather than wait for its end
 
 // Fish Audio S2 voice cues: [chuckling], [warm], [break]… shape how a line is said (tested on the JARVIS voice:
 // they're performed, not read out). Only these are kept for the voice; on screen they're never shown.
@@ -104,12 +108,13 @@ export class SpeechText {
     this.fence = false;
     this.skip = false; // inside a screen-only line
     this.tone = null; // a cue for the next sentence, from the body's emote, when it has none of its own
+    this.done = false; // past a "---" line: nothing more is said
   }
 
   /** The body's emote ([hype] etc.) colours the next sentence. */
   emote(action) { if (EMOTE_TONE[action]) this.tone = EMOTE_TONE[action]; }
 
-  push(text) { this.buf += text; this.drain(false); }
+  push(text) { if (this.done) return; this.buf += text; this.drain(false); }
 
   /** Before a tool call and at the end of a turn: say what's there even without a sentence end. */
   flush() { this.drain(true); }
@@ -130,6 +135,7 @@ export class SpeechText {
         // Not enough of the line yet to know what kind it is ("1" could become "1. ").
         const maybeSources = head && 'sources:'.startsWith(head.toLowerCase().replace(/\s+$/, ''));
         if (nl < 0 && !all && (maybeSources || (head.length < 9 && !/[\p{L}]{3}/u.test(head)))) return;
+        if (DETAIL_RULE.test(head) && (nl >= 0 || all)) { this.done = true; this.buf = ''; return; }
         this.atLineStart = false;
         if (/^```|^~~~/.test(head)) { this.fence = !this.fence; this.skip = true; }
         else this.skip = this.fence || SCREEN_ONLY.test(head);

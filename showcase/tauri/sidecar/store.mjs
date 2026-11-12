@@ -8,7 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 export const DIR = process.env.ROAMIES_DATA_DIR ? path.join(process.env.ROAMIES_DATA_DIR, 'sidekick') : path.join(os.homedir(), '.gg', 'sidekick');
-const SESSIONS = path.join(DIR, 'sessions');
+export const SESSIONS = path.join(DIR, 'sessions');
 const MEMORY = path.join(DIR, 'memory.json');
 const SESSION_FILE = /^\d{8}-\d{6}-[a-z0-9]{6}\.json$/;
 const KEEP_SESSIONS = 60;

@@ -274,6 +274,7 @@
           btn('Ask', () => act('ask', true), { kind: u.available ? 'ghost' : 'primary', k: 'ask', disabled: state.busy,
             aria: state.askKeys ? `Ask ${state.name}, or tap ${state.askKeys} anywhere` : `Ask ${state.name}`, title: state.askKeys ? `Or tap ${state.askKeys} anywhere` : null }),
           btn('Show list', () => act('list', true), { k: 'list' }),
+          btn('Conversation', () => act('convo', true), { k: 'convo', aria: 'Open the conversation window' }),
           state.snap ?? mac ? btn('Ask about an area', () => act('snap', true), { k: 'snap' }) : null,
           state.busy ? btn('Stop', () => act('stop'), { k: 'stop' }) : btn('New chat', () => act('new'), { k: 'new', disabled: !state.canNew, aria: 'Start a new conversation' }),
           mac ? null : btn(`Show ${state.name}`, () => act('show', true), { k: 'show' }))),
@@ -435,11 +436,23 @@
     ollama: 'A model in the Ollama app on this computer. Free, and nothing leaves your computer. It needs a model that can use tools.',
   };
 
+  // How deep replies go (Quick, Conversation, Work) and how hard the model thinks first: only the levels this
+  // model supports are offered. The same two settings are in the conversation window.
+  function repliesGroup() {
+    const r = state.replies2;
+    if (!r) return null;
+    return group('Replies', 'How much I say, and how hard I think first.', null,
+      picks('Reply depth', r.modes.map((x) => [x.id, x.label]), r.mode, (x) => act(`mode:${x}`), 'mode', Object.fromEntries(r.modes.map((x) => [x.id, x.hint]))),
+      el('p', { className: 'sub', textContent: 'Reasoning' }),
+      picks('Reasoning', r.thinkingChoices.map((x) => [x.id, x.label]), r.thinkingChoices.some((x) => x.id === r.thinking) ? r.thinking : r.thinkingUsed, (x) => act(`thinking:${x}`), 'thinking'),
+      r.thinkingChoices.length === 1 ? el('p', { className: 'why', textContent: "This model doesn't take a reasoning level." }) : null);
+  }
+
   // Settings, one page per concern.
   function modelPage() {
     const local = state.brain === 'ollama';
     const brain = picks('Brain', [['cloud', 'Cloud'], ['ollama', 'Ollama (local)']], local ? 'ollama' : 'cloud', (x) => act(`brain:${x}`), 'brain', BRAIN_TIPS);
-    if (local) return [group('Model', 'Which AI answers you.', null, brain, ollamaRows())];
+    if (local) return [group('Model', 'Which AI answers you.', null, brain, ollamaRows()), repliesGroup()];
     const on = state.providers.filter((p) => p.on);
     const model = state.model ? `${state.model.provider}:${state.model.id}` : '';
     const select = on.length ? el('span', { className: 'px field select' },
@@ -459,6 +472,7 @@
     return [
       group('Model', 'Which AI answers you.', null, brain,
         select ? [el('p', { className: 'sub', textContent: 'Model' }), select] : el('p', { className: 'empty', textContent: 'Sign in to an account below first.' })),
+      repliesGroup(),
       el('div', { className: 'group paged' }, el('div', { className: 'ghead' }, el('h2', { textContent: 'Accounts' }), el('p', { textContent: 'Sign in to use their models.' })), box),
       foot(null, nav),
     ];
@@ -549,7 +563,7 @@
   }
   // Wayland: the commands to bind to keys in the desktop's settings (no app may hold its own shortcuts there).
   // A command shows only after copying it failed, so it can be copied by hand.
-  const BIND_ROWS = [['talk', 'Talk to me'], ['summon', 'Show or hide me'], ['ask', 'Ask me'], ['list', 'Your list'], ['panel', 'This panel']];
+  const BIND_ROWS = [['talk', 'Talk to me'], ['summon', 'Show or hide me'], ['ask', 'Ask me'], ['list', 'Your list'], ['panel', 'This panel'], ['convo', 'The conversation window']];
   function behaviorPage() {
     const b = state.bind;
     return [
@@ -758,6 +772,7 @@
     document.title = 'Roamies panel (preview with sample data)';
     const at = Date.now();
     const s = {
+      replies2: { mode: 'quick', modes: [{ id: 'quick', label: 'Quick', hint: 'Short spoken replies, a few sentences.' }, { id: 'conversation', label: 'Conversation', hint: 'Natural back and forth, with follow-up questions.' }, { id: 'work', label: 'Work', hint: 'Research, analysis, drafting and multi-step tasks, at any length.' }], thinking: 'low', thinkingUsed: 'low', thinkingChoices: [{ id: 'off', label: 'Off' }, { id: 'low', label: 'Low' }, { id: 'medium', label: 'Medium' }, { id: 'high', label: 'High' }] },
       version: '0.9.0', build: { name: 'eleventhmetal build', repo: 'eleventhmetal-png/Roamies', upstream: 'KenKaiii/Roamies' }, os: /Win/.test(navigator.platform) ? 'win' : 'mac',
       status: { state: 'ready', text: 'Ready' }, busy: false, canNew: true,
       model: { provider: 'anthropic', id: 'claude-haiku-5-5', name: 'Claude Haiku 5.5', providerLabel: 'Anthropic' },
