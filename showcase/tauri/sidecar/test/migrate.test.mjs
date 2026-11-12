@@ -26,7 +26,8 @@ assert.equal(keepsLocal({ provider: 'openai' }), false);
 
 // The merged sidekick.mjs: with Ollama picked, nothing picks a cloud model on its own.
 {
-  const side = readFileSync(fileURLToPath(new URL('../sidekick.mjs', import.meta.url)), 'utf8');
+  // Windows checks files out with CRLF line endings: read them as LF, so the patterns below match there too.
+  const side = readFileSync(fileURLToPath(new URL('../sidekick.mjs', import.meta.url)), 'utf8').replace(/\r\n/g, '\n');
   const ensure = side.slice(side.indexOf('function ensureModel()'), side.indexOf('\n}\n', side.indexOf('function ensureModel()')));
   const localAt = ensure.indexOf('if (keepsLocal(config)) return'), cloudAt = ensure.indexOf("['anthropic', 'openai', 'gemini'");
   assert.ok(localAt > 0 && cloudAt > localAt, 'ensureModel returns for Ollama before it looks for a cloud provider');
