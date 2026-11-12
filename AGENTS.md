@@ -39,8 +39,10 @@ stopping the release; `latest.json` lists Linux only when its AppImage is there.
   (tested in `test/safety.test.mjs`); the hands helpers also refuse to type or click in the apps in `HANDS_OFF`
   (by bundle id in `hands/main.swift`, by program name in `hands-win/src/logic.rs`).
   Add a test case with every rule change.
-- In-app updates read `latest.json` from the newest published release, signed with the key in the
-  `TAURI_SIGNING_PRIVATE_KEY` secret. Keep `plugins.updater.pubkey` in `tauri.conf.json` matching it.
+- This is a custom build (FORK.md, identity in `sidecar/build.json`). In-app updates read `latest.json` only from
+  this repo's newest published release, signed with this build's own key (`~/.tauri/roamies-custom.key`, the
+  `TAURI_SIGNING_PRIVATE_KEY` secret). Keep `plugins.updater.pubkey` and the endpoints in `tauri.conf.json` pointing at
+  this build, never upstream's; `test/build.test.mjs` checks it. Upstream changes come in by merge (FORK.md).
   When GitHub's release links fail, the updater falls back to the copy on the `updates` branch, which
   `.github/workflows/update-feed.yml` writes whenever a release is published; downloads go through the API.
 
