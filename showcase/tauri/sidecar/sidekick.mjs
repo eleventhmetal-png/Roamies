@@ -1477,13 +1477,16 @@ function convoMessages() {
   convo({ kind: 'messages', session: session?.id ?? null, messages: display(msgs) });
 }
 async function onConvo(m) {
-  if (m.type === 'convo_open') { convoOpen = true; viewing = null; await resumed; convoMessages(); convoState(); }
-  else if (m.type === 'convo_closed') { convoOpen = false; viewing = null; }
+  if (m.type === 'convo_open') { convoOpen = true; viewing = null; logLine('convo_open', {}); await resumed; convoMessages(); convoState(); }
+  else if (m.type === 'convo_closed') { convoOpen = false; viewing = null; logLine('convo_closed', {}); }
   else if (m.type === 'convo_send' && typeof m.text === 'string' && m.text.trim()) {
     if (viewing) await resumeConversation(viewing.id); // asking from a past conversation carries it on
     enqueue(m.text.trim().slice(0, 20_000));
   }
-  else if (m.type === 'convo_history') convo({ kind: 'history', q: String(m.q ?? '').slice(0, 200), items: await listConversations(SESSIONS, { q: String(m.q ?? '').slice(0, 200) }) });
+  else if (m.type === 'convo_history') {
+    logLine('convo_history', { search: !!m.q });
+    convo({ kind: 'history', q: String(m.q ?? '').slice(0, 200), items: await listConversations(SESSIONS, { q: String(m.q ?? '').slice(0, 200) }) });
+  }
   else if (m.type === 'convo_view' && typeof m.id === 'string') {
     if (m.id === session?.id) { viewing = null; convoMessages(); return convoState(); }
     const c = await loadConversation(SESSIONS, m.id);
