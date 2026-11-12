@@ -570,6 +570,7 @@
       group('Behavior', 'What I may do, and when I start.', null,
         toggle('Sound effects', null, state.sound, () => act('sound'), 'sound'),
         toggle('Allow file edits and commands', 'Change files and run commands', state.actions, () => act('actions'), 'actions'),
+        toggle('Always visible', 'Stays on screen when idle. Drag me to my spot. The mic is separate.', state.always, () => act('always'), 'always'),
         state.voice ? toggle('Auto-listen', state.voice.on ? 'Mic opens when I ask you something.' : 'Needs Voice control on', state.voice.autoListen, () => act('autolisten'), 'autolisten') : null,
         state.voice?.mac ? toggle('Wake word', state.voice.on ? 'Say “Hey Roamies” to talk. Mic stays on.' : 'Needs Voice control on', state.voice.wakeWord, () => act('wakeword'), 'wakeword') : null,
         state.login ? toggle('Open at login', null, state.login.on, () => act('login'), 'login') : null),

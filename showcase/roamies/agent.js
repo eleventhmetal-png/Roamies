@@ -130,6 +130,10 @@
     const forcedVariant = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('enter') : null;
     // ptr: the real cursor whenever it's on this screen (even when it hasn't moved for a while), else null.
     const presence = { auto: false, idle: 1.5, summonIdle: 4.5, lastActive: 0, summoned: false, cursor: null, ptr: null, n: 0 };
+    // Always visible (Settings): no hiding when idle; she comes back on her own after anything that hid her (a voice
+    // turn, a move to another screen), and drifts back home (where she was last dropped) once she's done. A hide they
+    // asked for (the shortcut, Esc) wins until they show her again (userHidden). Nothing here touches the microphone.
+    Object.assign(presence, { always: false, userHidden: false, home: null, hiddenAt: 0, homeIdle: 6 });
     let SAFE = R.safe;
     // The visible screen: overlay minus menu bar / Dock / taskbar.
     const bounds = () => ({ l: SAFE.left, t: SAFE.top, r: W - SAFE.right, b: H - SAFE.bottom });
@@ -311,6 +315,31 @@
       m.drive = drive;
       setStation(m.x, m.y, p.slice());
       station.moving = station.rush = false;
+    };
+
+    // Always visible, each frame: hidden by something other than them (a voice turn, a screen change) → back at home
+    // once that's over; shown and done (nothing said, drawn or running for a while) away from home → back home, unless
+    // the cursor is working right there.
+    const homeSpot = () => (presence.home && spotOK(presence.home[0], presence.home[1]) ? presence.home : null);
+    const alwaysStep = () => {
+      if (pen.held || m.dragging || m.flung) return;
+      if (!visible()) {
+        if (k.presence === 'out' || now - presence.hiddenAt < 1.2 || R.holdAway?.()) return;
+        const h = homeSpot();
+        const [x, y] = h ?? pickSpot(presence.cursor?.[0] ?? null, presence.cursor?.[1] ?? null, station.x, station.y);
+        setStation(x, y);
+        presence.lastActive = now;
+        k.appear(nextVariant() === 'drop' ? 'materialize' : 'crt', x, y);
+        return;
+      }
+      const busyNow = b || dying.length || tool || now < actUntil || k.presence === 'in' || R.panel?.working;
+      if (busyNow) { presence.lastActive = now; return; }
+      const h = homeSpot();
+      if (!h || now - presence.lastActive < presence.homeIdle) return;
+      if (Math.hypot(station.x - h[0], station.y - h[1]) < k.R * 0.8) return;
+      const c = presence.ptr;
+      if (c && Math.hypot(c[0] - h[0], c[1] - h[1]) < AVOID()) return;
+      setStation(h[0], h[1]); m.goTo(h[0], h[1]); station.moving = true; station.flee = 0; station.quietUntil = now + 3;
     };
 
     // A new request (talking, typing, summoning): come over to the cursor if it's somewhere else now.
@@ -822,12 +851,14 @@
       // Act out an emote (wave, hype, upset, remind, motivate). Skipped while a tool is on stage.
       act: (name) => { if (tool) return false; ensureShown(); actUntil = now + (k.presence === 'in' ? 4.2 : 3.3); k.startAct(name); return true; },
       show: ({ summoned = false, variant } = {}) => {
-        presence.lastActive = now; presence.summoned = summoned;
+        presence.lastActive = now; presence.summoned = summoned; presence.userHidden = false;
         if (visible()) { if (summoned) comeToCursor(); return false; }
         const [x, y] = spot();
         return k.appear(variant ?? entrance(), x, y);
       },
-      hide: ({ instant = false, variant } = {}) => {
+      hide: ({ instant = false, variant, byUser = false } = {}) => {
+        if (byUser) presence.userHidden = true;
+        presence.hiddenAt = now;
         if (pen.held) penRelease();
         if (b) close(b);
         if (tool) tool.finish(true);
@@ -920,7 +951,15 @@
         setStation(x, y); m.x = x; m.y = y; m.vx = m.vy = 0; m.mode = 'rest'; m.rest = 1;
         station.moving = false; station.flee = 0; station.quietUntil = now + 1;
       },
-      setAuto: (on, idle) => { presence.auto = !!on; if (idle) presence.idle = idle; presence.lastActive = now; },
+      setAuto: (on, idle) => { presence.auto = !!on && !presence.always; if (idle) presence.idle = idle; presence.lastActive = now; },
+      // Always visible on or off; home: [x, y] in this overlay's px (where they last dropped her), or null.
+      setAlways: (on, home) => {
+        presence.always = !!on; presence.auto = !on; presence.lastActive = now;
+        if (home && spotOK(home[0], home[1])) presence.home = home;
+        if (!on) presence.userHidden = false;
+      },
+      get always() { return presence.always; },
+      get userHidden() { return presence.userHidden; },
       get visible() { return visible(); },
       // The speech bubble is still typing its words out.
       typing: () => !!b && b.kind === 'speech' && b.shown < b.text.length,
@@ -1118,7 +1157,10 @@
         presence.ptr = mx != null && mx >= 0 && my >= 0 && mx <= W && my <= H ? [mx, my] : null;
         if (popping) { if (presence.ptr) follow(env, dt); else { m.drive = null; fol.on = false; } }
         const onStage = stage();
-        if (presence.auto) {
+        if (presence.always && !presence.userHidden) alwaysStep();
+        // Hidden by them while Always visible is on: anything that brings her back (a reply, a reminder) lets her
+        // go again once idle, as without Always visible, until they show her themselves.
+        if (presence.auto || (presence.always && presence.userHidden)) {
           const hover = env.mouse?.active && Math.hypot(env.mouse.x - m.x, env.mouse.y - m.y) < k.R * 1.5;
           const busyNow = b || dying.length || tool || pen.held || now < actUntil || m.dragging || m.flung || hover || k.presence === 'in' || R.panel?.working;
           if (busyNow) presence.lastActive = now;
@@ -1139,6 +1181,7 @@
           // A plain click (press without moving it) isn't a move.
           if (station.held && !held && station.from && Math.hypot(m.x - station.from[0], m.y - station.from[1]) > k.R * 0.5) {
             setStation(m.x, m.y); station.quietUntil = now + 2.5; station.moving = false;
+            presence.home = [m.x, m.y]; R.onHomeDrop?.(m.x, m.y); // remembered between launches (the sidecar saves it)
           }
           station.held = held;
           // Popped up beside the cursor: it goes where the cursor goes (until it's dragged somewhere).
