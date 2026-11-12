@@ -167,9 +167,11 @@
     sel.disabled = s.thinkingChoices.length < 2;
     sel.title = s.thinkingChoices.length < 2 ? "This model doesn't take a reasoning level" : 'How hard the model thinks before it answers';
     const sendB = $('send');
-    sendB.textContent = s.busy && !viewing ? 'Stop' : 'Send';
-    sendB.className = `px btn ${s.busy && !viewing ? 'ghost' : 'primary'}`;
-    sendB.setAttribute('aria-label', s.busy && !viewing ? 'Stop the answer' : 'Send');
+    // While she answers the button is Stop, unless something's typed: then it sends (queued after this reply).
+    const stops = s.busy && !viewing && !input.value.trim();
+    sendB.textContent = stops ? 'Stop' : 'Send';
+    sendB.className = `px btn ${stops ? 'ghost' : 'primary'}`;
+    sendB.setAttribute('aria-label', stops ? 'Stop the answer' : 'Send');
     $('viewing').hidden = !viewing;
     $('new-btn').disabled = !!s.busy;
     if (s.steps) steps(s.steps);
@@ -188,16 +190,17 @@
 
   const input = $('input');
   const grow = () => { input.style.height = 'auto'; input.style.height = `${Math.min(180, input.scrollHeight)}px`; };
-  input.addEventListener('input', grow);
-  input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); $('compose').requestSubmit(); } });
-  $('compose').addEventListener('submit', (e) => {
-    e.preventDefault();
-    if (state?.busy && !viewing) return act('stop');
+  input.addEventListener('input', () => { grow(); if (state) controls(); });
+  // Enter always sends, even while she's answering (it's queued after the current reply); only the button stops.
+  const sendText = () => {
     const text = input.value.trim();
     if (!text) return input.focus();
     send({ type: 'convo_send', text });
     input.value = ''; grow();
-  });
+  };
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); sendText(); } });
+  $('compose').addEventListener('submit', (e) => { e.preventDefault(); sendText(); });
+  $('send').addEventListener('click', () => (state?.busy && !viewing && !input.value.trim() ? act('stop') : sendText()));
   $('resume-btn').addEventListener('click', () => viewing && send({ type: 'convo_resume', id: viewing }));
   $('back-btn').addEventListener('click', () => send({ type: 'convo_back' }));
 

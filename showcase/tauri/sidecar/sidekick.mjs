@@ -56,7 +56,13 @@ const guideVoices = new Set();
 // The conversation window (convo/), while it's open: it sees the same reply stream as the overlay, plus the full
 // answer below a Work reply's "---" line, which the overlay doesn't get.
 let convoOpen = false;
-const convo = (msg) => { if (convoOpen) send({ type: 'convo', msg }); };
+// The request under way, as the window would show it: the conversation before it, then what it has streamed so far.
+// A window that opens (or finishes loading) mid-reply starts from this, so it doesn't miss the start of the answer.
+let convoLive = null;
+const convo = (msg) => {
+  if (convoLive && (msg.kind === 'user' || msg.kind === 'agent') && convoLive.events.length < 20_000) convoLive.events.push(msg);
+  if (convoOpen) send({ type: 'convo', msg });
+};
 const ui = (msg) => {
   if (msg.kind === 'agent' && !intro) convo({ kind: 'agent', e: msg.e });
   if (msg.kind === 'speech') {
@@ -741,7 +747,7 @@ async function memoryPass(s, why) {
 /** Starts a clean conversation; the one ending gets a memory pass (`why` names it in the log). */
 function freshSession(why) {
   const old = session;
-  session = newSession(config.provider, config.model); liveBlocks.clear(); agent = null; pendingFold = null; lastInput = null; quizDone = null; pruneSessions();
+  session = newSession(config.provider, config.model); liveBlocks.clear(); agent = null; pendingFold = null; lastInput = null; quizDone = null; pruneSessions(session.id);
   return why && old?.messages.length ? memoryPass(old, why) : Promise.resolve([]);
 }
 
@@ -824,7 +830,7 @@ async function readyAgent() {
   await resumed;
   await fishKeyLoaded;
   if (!(await brainReady())) return onOllama() ? ollama.problem(config.model) : `Sign in to an AI provider first: the Model page in ${PANEL}. Then ask me again!`;
-  if (!session) { session = newSession(config.provider, config.model); liveBlocks.clear(); agent = null; pruneSessions(); }
+  if (!session) { session = newSession(config.provider, config.model); liveBlocks.clear(); agent = null; pruneSessions(session.id); }
   if (agentStale && agent) { agent = null; }
   agentStale = false;
   let cc;
@@ -888,6 +894,7 @@ async function prompt(text, image = null, note = '', byVoice = false) {
   menu();
   controller = new AbortController();
   agent.setSignal(controller.signal);
+  convoLive = intro ? null : { session: session?.id ?? null, base: agent && session ? forDisk(withoutLive(agent.getMessages())) : session?.messages ?? [], events: [] };
   ui({ kind: 'agent', e: { type: 'start' } });
   if (!text.startsWith('(')) convo({ kind: 'user', text: userText(text), image: !!image });
   // Voice: the socket opens now, while the model thinks; sentences are spoken as soon as each is ready.
@@ -1043,6 +1050,7 @@ async function prompt(text, image = null, note = '', byVoice = false) {
     // CapCut") on every later request, with their own tags queued behind it.
     for (const id of activity.stopped()) ui({ kind: 'agent', e: { type: 'tool_end', id, isError: true } });
     syncSession();
+    convoLive = null;
     if (convoOpen && !intro && !viewing) convoMessages(); // the window settles on what was saved
     if (stalled) agent = null; // the next request starts on a fresh connection, from the saved conversation
     // No usage reported: estimate what the last call sent.
@@ -1473,6 +1481,12 @@ function convoState() {
 // Read-only: what the agent holds now (mid-reply too), or the saved session. Never saves or folds: that's the
 // request's own job (syncSession), and doing it here mid-reply could fold the history out from under it.
 function convoMessages() {
+  if (convoLive && convoLive.session === session?.id) {
+    // Mid-reply: the conversation before this request, then everything it has streamed, in order.
+    send({ type: 'convo', msg: { kind: 'messages', session: session?.id ?? null, messages: display(convoLive.base) } });
+    for (const msg of convoLive.events) send({ type: 'convo', msg });
+    return;
+  }
   const msgs = agent && session ? forDisk(withoutLive(agent.getMessages())) : session?.messages ?? [];
   convo({ kind: 'messages', session: session?.id ?? null, messages: display(msgs) });
 }
@@ -1509,6 +1523,8 @@ async function resumeConversation(id) {
   const old = session;
   if (agent && old) syncSession();
   session = c.session; liveBlocks.clear(); agent = null; pendingFold = null; lastInput = null; quizDone = null; viewing = null;
+  // Saved now, so it's the most recently used: a restart carries it on, and pruning keeps it.
+  session.lastActiveAt = Date.now(); saveSession(session);
   if (old?.messages.length && old.id !== id) memoryPass(old, 'resumed another');
   logLine('resumed', { session: id });
   convoMessages(); convoState(); menu();

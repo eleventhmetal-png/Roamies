@@ -105,7 +105,13 @@ assert.ok(fresh.openCommitments().length >= 1, 'recovered from .bak');
 fs.writeFileSync(path.join(dir, 'sessions', 'notes.txt'), 'mine');
 fs.writeFileSync(path.join(dir, 'sessions', '20200101-000000-aaaaa0.folded.jsonl'), '{}\n');
 fs.writeFileSync(path.join(dir, 'sessions', `${s.id}.folded.jsonl`), '{}\n');
-for (let i = 0; i < 70; i++) fs.writeFileSync(path.join(dir, 'sessions', `2020${String(1 + (i % 12)).padStart(2, '0')}${String(1 + i % 28).padStart(2, '0')}-000000-${String(i).padStart(6, 'a')}.json`), '{}');
+// Old conversations look old on disk too: last saved when they were used, in 2020.
+for (let i = 0; i < 70; i++) {
+  const f = path.join(dir, 'sessions', `2020${String(1 + (i % 12)).padStart(2, '0')}${String(1 + i % 28).padStart(2, '0')}-000000-${String(i).padStart(6, 'a')}.json`);
+  fs.writeFileSync(f, '{}');
+  const t = new Date(2020, i % 12, 1 + (i % 28));
+  fs.utimesSync(f, t, t);
+}
 await S.pruneSessions();
 const left = fs.readdirSync(path.join(dir, 'sessions'));
 assert.equal(left.filter((n) => /^\d{8}-\d{6}-[a-z0-9]{6}\.json$/.test(n)).length, 60);
@@ -114,6 +120,21 @@ assert.ok(left.some((n) => n.includes('.corrupt-')), 'corrupt copy untouched');
 assert.ok(left.includes(`${s.id}.json`), 'newest real session kept');
 assert.ok(!left.includes('20200101-000000-aaaaa0.folded.jsonl'), "a pruned session's folded turns go with it");
 assert.ok(left.includes(`${s.id}.folded.jsonl`), "a kept session's folded turns stay");
+// A conversation resumed from history: started long ago, used now. It's the one a restart carries on, and pruning
+// keeps it (and always keeps the current one, whatever its age).
+{
+  const sd = path.join(dir, 'sessions');
+  const old = { ...S.newSession('p', 'm'), id: '20190101-000000-oldone', messages: [{ role: 'user', content: 'from 2019' }] };
+  await S.saveSession(old);
+  await S.flushWrites();
+  assert.equal((await S.loadLatestSession()).id, old.id, 'the most recently saved conversation resumes, not the most recently started');
+  const t = new Date(2019, 0, 1);
+  fs.utimesSync(path.join(sd, `${old.id}.json`), t, t);
+  for (let i = 0; i < 5; i++) fs.writeFileSync(path.join(sd, `2021010${1 + i}-000000-extra${i}a.json`), '{}');
+  await S.pruneSessions(old.id);
+  assert.ok(fs.existsSync(path.join(sd, `${old.id}.json`)), 'the current conversation is never pruned, however old');
+  assert.equal(fs.readdirSync(sd).filter((n) => /^\d{8}-\d{6}-[a-z0-9]{6}\.json$/.test(n)).length, 60, 'still 60 kept');
+}
 console.log('store tests: all passed');
 
 // Area snaps (images in user messages) count too: only the newest three images overall survive.

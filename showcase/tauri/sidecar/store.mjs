@@ -66,9 +66,17 @@ export function newSession(provider, model) {
   return { version: 1, id: `${stamp(now)}-${randomBytes(3).toString('hex')}`, startedAt: now.getTime(), lastActiveAt: now.getTime(), provider, model, messages: [] };
 }
 
+// Session files, most recently used first: by when each was last saved (a conversation resumed from history is
+// saved again, so it counts as recent), then by name (when it started).
+async function byLastUse() {
+  let names;
+  try { names = (await fs.readdir(SESSIONS)).filter((n) => SESSION_FILE.test(n)); } catch { return []; }
+  const at = await Promise.all(names.map((n) => fs.stat(path.join(SESSIONS, n)).then((st) => st.mtimeMs, () => 0)));
+  return names.map((n, i) => [n, at[i]]).sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? 1 : -1)).map(([n]) => n);
+}
+
 export async function loadLatestSession() {
-  let names = [];
-  try { names = (await fs.readdir(SESSIONS)).filter((n) => SESSION_FILE.test(n)).sort().reverse(); } catch { return null; }
+  const names = await byLastUse();
   for (const n of names.slice(0, 5)) {
     const s = readJson(path.join(SESSIONS, n));
     // A Get to Know Me chat is its own conversation: the one from before it carries on.
@@ -79,11 +87,13 @@ export async function loadLatestSession() {
 
 export const saveSession = (s) => (s?.messages.length ? writeJson(path.join(SESSIONS, `${s.id}.json`), s) : Promise.resolve());
 
-/** Keeps the newest sessions. Only touches files this module names, in this folder. */
-export async function pruneSessions() {
-  let names;
-  try { names = (await fs.readdir(SESSIONS)).filter((n) => SESSION_FILE.test(n)).sort(); } catch { return; }
-  const drop = names.slice(0, Math.max(0, names.length - KEEP_SESSIONS));
+/**
+ * Keeps the most recently used sessions, and always `keep` (the current one's id). Only touches files this module
+ * names, in this folder.
+ */
+export async function pruneSessions(keep = null) {
+  const names = (await byLastUse()).reverse(); // least recently used first
+  const drop = names.filter((n) => n !== `${keep}.json`).slice(0, Math.max(0, names.length - KEEP_SESSIONS));
   if (!drop.length) return;
   console.error(`[store] pruning ${drop.length} old session(s), keeping ${KEEP_SESSIONS}`);
   for (const n of drop) {

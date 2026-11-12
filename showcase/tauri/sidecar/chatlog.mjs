@@ -100,7 +100,7 @@ const startOf = (id) => {
 };
 
 /**
- * Saved conversations, newest first: [{ id, title, at, count, kind, snippet? }]. With `q`, only those whose words
+ * Saved conversations, most recently used first: [{ id, title, at, count, kind, snippet? }]. With `q`, only those whose words
  * (asked or answered, folded turns too) contain it, with a snippet around the first match.
  */
 export async function listConversations(dir, { q = '', limit = 60 } = {}) {
@@ -109,7 +109,6 @@ export async function listConversations(dir, { q = '', limit = 60 } = {}) {
   const needle = String(q).trim().toLowerCase();
   const out = [];
   for (const id of names) {
-    if (out.length >= limit) break;
     const c = await loadConversation(dir, id);
     if (!c) continue;
     const msgs = c.messages.filter((m) => m.role === 'user' || m.role === 'assistant');
@@ -125,5 +124,6 @@ export async function listConversations(dir, { q = '', limit = 60 } = {}) {
     }
     out.push(item);
   }
-  return out;
+  // Most recently used first: a resumed conversation sits at the top, not where it started.
+  return out.sort((a, b) => b.at - a.at).slice(0, limit);
 }
