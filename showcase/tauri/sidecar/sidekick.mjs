@@ -33,6 +33,7 @@ import { QUESTIONS, openNote, answerTurn, wantsSkip, endsChat, splitTurn, plain,
 import { SpeechText, CueFilter, VOICE_CUES, endsWithQuestion } from './speech.mjs';
 import { createSpeaker, VOICE_PROVIDERS } from './speaker.mjs';
 import BUILD from './build.json' with { type: 'json' };
+import { NO_FEED, whyNoFeed } from './releases.mjs';
 import { DEFAULT_VOICE, FISH_CHOICES } from './fish.mjs';
 import { createSecrets, retryLoad } from './secrets.mjs';
 import { createActivity } from './activity.mjs';
@@ -1235,7 +1236,15 @@ function installUpdate() {
   update.installing = true; menu();
   send({ type: 'update', install: true });
 }
-function onUpdateStatus(m) {
+async function onUpdateStatus(m) {
+  // No feed at all reads the same offline as when this build hasn't released anything yet: GitHub says which.
+  if (m.state === 'error' && !m.why && NO_FEED.test(String(m.error ?? ''))) {
+    const why = await whyNoFeed(UPDATE_REPO);
+    logLine('update_no_feed', { why });
+    if (why === 'no_release') return onUpdateStatus({ state: 'none', why });
+    if (why === 'no_feed') return onUpdateStatus({ state: 'error', why, error: `${UPDATE_REPO}'s newest release has no update file (latest.json)` });
+    m = { ...m, why: 'unknown' };
+  }
   logLine('update_status', { state: String(m.state ?? ''), ...(m.version ? { version: String(m.version) } : {}), manual: !!update.manual });
   const manual = update.manual;
   update.checking = false;
@@ -1246,7 +1255,7 @@ function onUpdateStatus(m) {
   panel();
   if (m.state === 'none') {
     update.available = null; update.manual = false;
-    if (manual) say(`You're up to date (${VERSION}).`, 'happy');
+    if (manual) say(m.why === 'no_release' ? `You're on ${VERSION}, the newest there is: ${UPDATE_REPO} hasn't published a release yet.` : `You're up to date (${VERSION}).`, 'happy');
   } else if (m.state === 'available') {
     update.available = m.version; update.page = !!m.page; update.manual = false; menu();
     // Say it once per version; the menu item stays until it's installed.
@@ -1937,7 +1946,7 @@ createInterface({ input: process.stdin }).on('line', (line) => {
   else if (m.type === 'quiz_done') onQuizDone(String(m.part), Array.isArray(m.picks) ? m.picks.slice(0, 12).map((v) => (Number.isInteger(v) ? v : -1)) : []);
   else if (m.type === 'ink_cleared') { ink.cleared(); endShowcase('gone'); }
   else if (m.type === 'user_click' && Number.isFinite(m.x) && Number.isFinite(m.y)) ink.userClick({ x: m.x, y: m.y, role: String(m.role ?? ''), app: String(m.app ?? ''), acts: m.acts === true });
-  else if (m.type === 'update_status') onUpdateStatus(m);
+  else if (m.type === 'update_status') onUpdateStatus(m).catch((e) => console.error('update status', e));
   // Wayland: the guide or panel copies one of the commands to bind (only those, never other text).
   else if (m.type === 'copy_bind' && Object.hasOwn(BIND, String(m.which))) shellCall({ type: 'clipboard', text: BIND[m.which] }).then((r) => send({ type: onboarding ? 'onboard' : 'panel', msg: { kind: 'copied', which: String(m.which), ok: !!r?.ok } }));
   // Copy details: the last error someone saw, with the version and OS, scrubbed (never other text).

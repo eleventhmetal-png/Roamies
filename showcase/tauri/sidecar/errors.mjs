@@ -70,6 +70,7 @@ const AREAS = {
       ['E41', /signature|minisign/i, () => "The update didn't pass its safety check. Try again later.", true],
       ['E42', DISK_FULL, () => 'Not enough disk space for the update. Free some up.'],
       ['E43', NO_ACCESS, () => "I couldn't replace the app. Reinstall it from GitHub.", true],
+      ['E46', /no update file/i, () => 'The newest release has no update file yet.'],
       ['E44', /valid release JSON|platform .{0,40}not found|\b404\b/i, () => "Couldn't check for updates. Check your internet."],
       ['E45', NET, () => "The update didn't download. Check your internet."],
     ],
