@@ -7,8 +7,12 @@ This repository, [eleventhmetal-png/Roamies](https://github.com/eleventhmetal-pn
 
 What it adds to upstream:
 
-- **Ollama brain** (Model page → Brain → Ollama): local models with tool calling, and never a paid fallback.
-- **VoiceStudio voice provider** (Voice page): local text-to-speech, and never a fallback to Fish Audio.
+- **No paid fallback from Ollama.** Upstream 0.1.35 has Ollama as a provider on the Model page and VoiceStudio as a
+  voice; this build first had its own versions and now uses upstream's. On top of them, with an Ollama model
+  picked, Roamies never switches to a cloud model by itself: not when Ollama is closed or not connected yet, not when
+  you sign in to or remove another account, and not when you remove Ollama (it waits for you to pick). VoiceStudio,
+  like upstream's, never falls back to Fish Audio. `migrate.mjs` carries this build's older settings over
+  (`voiceProvider` → `tts`; the Ollama "brain" → the local provider).
 - **Its own updates** (below).
 
 ## Branches
@@ -17,7 +21,7 @@ What it adds to upstream:
 | --- | --- |
 | `main` | Upstream as it is. Only ever fast-forwarded from `upstream/main`, never committed to directly. |
 | `custom` | The custom build: upstream plus everything above. Releases are tagged from here. |
-| `voice-provider-voicestudio` | The VoiceStudio and Ollama work as first written. `custom` contains it; it is kept for reference. |
+| `voice-provider-voicestudio` | The VoiceStudio and Ollama work as first written; also the head of an open pull request to upstream (#28). Kept for reference: since 0.1.35 upstream has its own versions. |
 | feature branches | One per upgrade, branched from `custom` and merged back after review. |
 
 ## Updates come only from this build
@@ -77,6 +81,9 @@ git switch custom && git merge main
 ```
 
 When the merge conflicts:
+
+- **Where upstream has its own version of something this build added** (as with Ollama and VoiceStudio in 0.1.35):
+  take upstream's, and re-apply only this build's rules on top, as small tested patches.
 
 - **`tauri.conf.json`:** keep this build's `plugins.updater` (endpoints and `pubkey`). Take upstream's other
   changes.

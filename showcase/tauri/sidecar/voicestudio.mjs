@@ -24,7 +24,7 @@ export function studioUrl(env = process.env) {
 
 // What the user reads when it isn't working, by reason.
 export const STUDIO_MESSAGES = {
-  offline: "VoiceStudio isn't running. Open VoiceStudio, then press Check again.",
+  offline: 'Run VoiceStudio first.',
   starting: 'VoiceStudio is still starting up. Give it a moment, then press Check again.',
   other: "Something else is answering on VoiceStudio's port, not VoiceStudio.",
   engine: "VoiceStudio's voice engine isn't ready",
