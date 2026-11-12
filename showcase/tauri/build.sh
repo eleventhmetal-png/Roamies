@@ -29,10 +29,14 @@ case "$TRIPLE" in
 esac
 cd src-tauri
 # macOS signing: APPLE_SIGNING_IDENTITY if set, else the first Developer ID Application certificate in
-# the keychain, else ad-hoc. A stable identity keeps macOS permissions across rebuilds.
+# the keychain, else the first Apple Development one (fine for this Mac: a locally built app isn't quarantined),
+# else ad-hoc. A stable identity keeps macOS permissions across rebuilds; ad-hoc changes with every build.
 if [ "$(uname)" = "Darwin" ] && [ -z "${APPLE_SIGNING_IDENTITY:-}" ]; then
-  APPLE_SIGNING_IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null | sed -n 's/.*"\(Developer ID Application: [^"]*\)".*/\1/p' | head -1)"
+  IDS="$(security find-identity -v -p codesigning 2>/dev/null)"
+  APPLE_SIGNING_IDENTITY="$(sed -n 's/.*"\(Developer ID Application: [^"]*\)".*/\1/p' <<<"$IDS" | head -1)"
+  [ -n "$APPLE_SIGNING_IDENTITY" ] || APPLE_SIGNING_IDENTITY="$(sed -n 's/.*"\(Apple Development: [^"]*\)".*/\1/p' <<<"$IDS" | head -1)"
   export APPLE_SIGNING_IDENTITY="${APPLE_SIGNING_IDENTITY:--}"
+  echo "Signing as: $APPLE_SIGNING_IDENTITY"
 fi
 # Update signing (release builds): TAURI_SIGNING_PRIVATE_KEY if set, else this custom build's own key in ~/.tauri
 # (FORK.md). Its public half is plugins.updater.pubkey in tauri.conf.json; the key itself is never in the repo.
