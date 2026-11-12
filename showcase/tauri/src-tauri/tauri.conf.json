@@ -37,10 +37,10 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEQ0MEI0NTJGMEY1NkNGNUYKUldSZnoxWVBMMFVMMUlXK2ROU3YyaDJVZy9scW56d081dEZwelE0SFBQeFVSVXRVYnZyY3BSd0cK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IENEMDhEN0E4RjYwMkVGRkUKUldUKzd3TDJxTmNJemFxcExCNkxUUk5KNlIyQlE1SmJyd24rNFJ6TDM2VS9kK0VTUmEyYW15dlMK",
       "endpoints": [
-        "https://github.com/KenKaiii/Roamies/releases/latest/download/latest.json",
-        "https://raw.githubusercontent.com/KenKaiii/Roamies/updates/latest.json"
+        "https://github.com/eleventhmetal-png/Roamies/releases/latest/download/latest.json",
+        "https://raw.githubusercontent.com/eleventhmetal-png/Roamies/updates/latest.json"
       ],
       "windows": {
         "installMode": "passive"

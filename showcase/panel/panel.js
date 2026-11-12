@@ -124,7 +124,10 @@
     const now = $('now');
     now.replaceChildren(el('b', { textContent: s.text }), state.model ? ` · ${state.model.name}` : s.state === 'off' ? (state.brain === 'ollama' ? ' · See the Model page' : ' · Sign in on the Model page') : '');
     now.title = now.textContent;
+    // A custom build says so beside its version, and where it updates from.
     $('ver').textContent = `v${state.version}`;
+    $('by').textContent = state.build ? 'By Ken Kai · custom build' : 'By Ken Kai';
+    $('by').title = state.build ? `${state.build.name}: updates only from github.com/${state.build.repo}, never from the original Roamies` : '';
     updateButton();
     react();
     // The sidebar marks a page that needs you: no account to answer with.
@@ -567,7 +570,7 @@
     ['Skool', 'Learn with Ken, or support him', 'https://www.skool.com/kenkai', "Open Ken Kai's Skool community"],
     ['YouTube', '@kenkaidoesai', 'https://www.youtube.com/@kenkaidoesai', "Open Ken Kai's YouTube channel"],
     ['TikTok', '@ggkenkai', 'https://www.tiktok.com/@ggkenkai', "Open Ken Kai's TikTok"],
-    ['Source code', 'Open source under AGPL-3.0', 'https://github.com/KenKaiii/Roamies', 'Open the Roamies source code on GitHub'],
+    ['Original Roamies', 'Open source under AGPL-3.0', 'https://github.com/KenKaiii/Roamies', 'Open the original Roamies source code on GitHub'],
   ];
   let ken = null;
   function maker() {
@@ -588,6 +591,11 @@
         KEN.map(([label, hint, url, aria]) => el('div', { className: 'setting' },
           el('span', {}, label, el('small', { textContent: hint })),
           link('Open', () => send({ type: 'open_link', url }), { k: `ken-${label.toLowerCase()}`, aria })))),
+      // A custom build: what it is and where its updates come from (its own releases, never the original's).
+      state.build ? group('This build', null, null,
+        el('div', { className: 'setting' },
+          el('span', {}, state.build.name, el('small', { textContent: `Updates only from github.com/${state.build.repo}` })),
+          link('Open', () => send({ type: 'open_link', url: `https://github.com/${state.build.repo}` }), { k: 'build-repo', aria: `Open ${state.build.repo} on GitHub` }))) : null,
       group('Help', null, null,
         el('div', { className: 'links' },
           link('Setup guide', () => act('setup', true), { k: 'setup' }),
@@ -750,7 +758,7 @@
     document.title = 'Roamies panel (preview with sample data)';
     const at = Date.now();
     const s = {
-      version: '0.9.0', os: /Win/.test(navigator.platform) ? 'win' : 'mac',
+      version: '0.9.0', build: { name: 'eleventhmetal build', repo: 'eleventhmetal-png/Roamies', upstream: 'KenKaiii/Roamies' }, os: /Win/.test(navigator.platform) ? 'win' : 'mac',
       status: { state: 'ready', text: 'Ready' }, busy: false, canNew: true,
       model: { provider: 'anthropic', id: 'claude-haiku-5-5', name: 'Claude Haiku 5.5', providerLabel: 'Anthropic' },
       providers: [

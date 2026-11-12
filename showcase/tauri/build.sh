@@ -34,6 +34,12 @@ if [ "$(uname)" = "Darwin" ] && [ -z "${APPLE_SIGNING_IDENTITY:-}" ]; then
   APPLE_SIGNING_IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null | sed -n 's/.*"\(Developer ID Application: [^"]*\)".*/\1/p' | head -1)"
   export APPLE_SIGNING_IDENTITY="${APPLE_SIGNING_IDENTITY:--}"
 fi
+# Update signing (release builds): TAURI_SIGNING_PRIVATE_KEY if set, else this custom build's own key in ~/.tauri
+# (FORK.md). Its public half is plugins.updater.pubkey in tauri.conf.json; the key itself is never in the repo.
+if [ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ] && [ -f "$HOME/.tauri/roamies-custom.key" ]; then
+  export TAURI_SIGNING_PRIVATE_KEY="$HOME/.tauri/roamies-custom.key"
+  export TAURI_SIGNING_PRIVATE_KEY_PASSWORD="${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}"
+fi
 # ./build.sh release --target <triple> builds for one target (used by the release workflow).
 MODE="${1:-}"; [ $# -gt 0 ] && shift
 if [ "$MODE" = "dev" ]; then cargo build; else cargo tauri build ${TAURI_BUNDLES:+--bundles $TAURI_BUNDLES} "$@"; fi

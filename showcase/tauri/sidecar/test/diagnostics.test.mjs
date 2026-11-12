@@ -50,9 +50,10 @@ assert.deepEqual(act.map(([title]) => title), ['Activity log 2026-11-09.log', 'A
 assert.ok(act[1][1].startsWith('2026-11-10 event'), 'the newest day comes whole');
 
 // The report: a header saying where to send it, each section, all of it scrubbed.
-const report = buildReport({ now: new Date('2026-11-11T09:30:00Z'), version: '1.2.3', sections: [['System', { platform: 'win32' }], ['Voice helper log', '/Users/jane/x sk-ant-api03-AbCdEfGhIjKlMnOpQrSt'], ['Empty', '']] }, who);
-assert.match(report, /^Roamies diagnostics\nMade 2026-11-11T09:30:00\.000Z by Roamies 1\.2\.3\./);
-assert.match(report, /github\.com\/KenKaiii\/Roamies\/issues/);
+const report = buildReport({ now: new Date('2026-11-11T09:30:00Z'), version: '1.2.3', build: 'eleventhmetal build', repo: 'eleventhmetal-png/Roamies', sections: [['System', { platform: 'win32' }], ['Voice helper log', '/Users/jane/x sk-ant-api03-AbCdEfGhIjKlMnOpQrSt'], ['Empty', '']] }, who);
+assert.match(report, /^Roamies diagnostics\nMade 2026-11-11T09:30:00\.000Z by Roamies 1\.2\.3 \(eleventhmetal build\)\./, 'the header names the custom build');
+assert.match(report, /github\.com\/eleventhmetal-png\/Roamies\/issues/, "a custom build's report goes to its own repo");
+assert.ok(!/KenKaiii/.test(report), 'not to the original Roamies');
 assert.match(report, /-------- System -+\n\{\n {2}"platform": "win32"\n\}/);
 assert.match(report, /-------- Voice helper log -+\n~\/x <key>\n/);
 assert.match(report, /-------- Empty -+\n\(none\)/);

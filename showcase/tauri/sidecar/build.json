@@ -1,0 +1,6 @@
+{
+  "name": "eleventhmetal build",
+  "repo": "eleventhmetal-png/Roamies",
+  "upstream": "KenKaiii/Roamies",
+  "about": "A custom build of Roamies by Ken Kai. It updates only from its own releases, signed with its own key; see FORK.md."
+}

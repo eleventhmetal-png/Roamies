@@ -66,9 +66,9 @@ const line = (title) => `\n${'-'.repeat(8)} ${title} ${'-'.repeat(Math.max(4, 72
 const show = (v) => (typeof v === 'string' ? v : JSON.stringify(v, null, 2));
 
 /** The report as text: a header, then each section ([title, text or object]) in order, all of it redacted. */
-export function buildReport({ now = new Date(), version = '0.0.0', sections = [] }, scrub = {}) {
-  let out = `Roamies diagnostics\nMade ${now.toISOString()} by Roamies ${version}.\n`
-    + 'Send this file to the Roamies developer: attach it to a GitHub issue (github.com/KenKaiii/Roamies/issues) or send it directly.\n'
+export function buildReport({ now = new Date(), version = '0.0.0', sections = [], build = 'Roamies', repo = 'KenKaiii/Roamies' }, scrub = {}) {
+  let out = `Roamies diagnostics\nMade ${now.toISOString()} by Roamies ${version} (${build}).\n`
+    + `Send this file to whoever maintains this build: attach it to a GitHub issue (github.com/${repo}/issues) or send it directly.\n`
     + 'Keys, tokens, emails, your home folder and user name have been removed. Look it over before sending if you like.\n';
   for (const [title, body] of sections) {
     const text = body == null || body === '' ? '(none)' : show(body);
