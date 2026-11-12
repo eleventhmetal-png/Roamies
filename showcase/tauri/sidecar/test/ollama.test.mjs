@@ -125,7 +125,8 @@ const fake = (probe) => {
 // The sidecar: with Ollama picked, ensureModel decides on Ollama alone and returns before any cloud provider is chosen;
 // signing in to a cloud account doesn't move an Ollama user; credentials for 'local' never read a cloud key.
 {
-  const side = readFileSync(fileURLToPath(new URL('../sidekick.mjs', import.meta.url)), 'utf8');
+  // Windows checks files out with CRLF line endings: read them as LF, so the patterns below match there too.
+  const side = readFileSync(fileURLToPath(new URL('../sidekick.mjs', import.meta.url)), 'utf8').replace(/\r\n/g, '\n');
   const ensure = side.slice(side.indexOf('function ensureModel()'), side.indexOf('\n}\n', side.indexOf('function ensureModel()')));
   const ollamaAt = ensure.indexOf('if (onOllama())'), cloudAt = ensure.indexOf("['anthropic', 'openai', 'gemini'");
   assert.ok(ollamaAt >= 0 && cloudAt > ollamaAt, 'the Ollama branch comes before the cloud provider search');
