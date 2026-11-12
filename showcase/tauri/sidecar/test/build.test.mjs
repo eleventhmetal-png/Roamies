@@ -45,6 +45,15 @@ assert.ok(!/github\.com\/KenKaiii\/Roamies\/(issues|releases)/.test(side), 'issu
 const linux = read('../../src-tauri/src/linux.rs');
 assert.match(linux, new RegExp(`"https://github\\.com/${BUILD.repo.replace(/[.]/g, '\\.')}/releases/latest"`), "Linux's download page is this build's");
 
+// What the model reads about the app (about.mjs, upstream's) names this build's repo for downloads and issues.
+{
+  const { aboutRoamies } = await import('../about.mjs');
+  const t = aboutRoamies({ name: 'Roamie', looks: ['Roamie'], mac: true, build: { name: BUILD.name, repo: BUILD.repo, upstream: BUILD.upstream } });
+  assert.ok(t.includes(`github.com/${BUILD.repo}/issues`) && t.includes(`Downloads and source: github.com/${BUILD.repo}`), 'issues and downloads are this build\'s');
+  assert.ok(t.includes(`a custom build of Roamies by Ken Kai (github.com/${BUILD.upstream})`), 'and it says it is a custom build');
+  assert.match(side, /hotkeys: HOTKEYS_OK, build: \{ name: BUILD\.name, repo: UPDATE_REPO/, 'the sidecar passes the build');
+}
+
 // The signing key never goes in the repo: only its public half is here.
 // (The phrase is built here so this file doesn't match itself.)
 const SECRET = `${['encrypted', 'secret', 'key'].join(' ')}|BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY`;

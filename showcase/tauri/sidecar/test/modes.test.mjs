@@ -22,7 +22,7 @@ assert.match(modeStyle('work'), /no length limit/i);
 // sidekick.mjs swaps the Quick length limit out of its styles for the other modes: the sentences it replaces are
 // really in them (a reworded style would otherwise keep "one to three sentences" in Work mode, silently).
 {
-  const side = readFileSync(fileURLToPath(new URL('../sidekick.mjs', import.meta.url)), 'utf8');
+  const side = readFileSync(fileURLToPath(new URL('../sidekick.mjs', import.meta.url)), 'utf8').replace(/\r\n/g, '\n'); // Windows checks out CRLF
   const quote = (name) => /'((?:[^'\\]|\\.)*)'/.exec(side.slice(side.indexOf(`const ${name} = `)))[1].replace(/\\'/g, "'");
   const text = side.slice(side.indexOf('const TEXT_STYLE = `'), side.indexOf('`;', side.indexOf('const TEXT_STYLE = `')));
   const voice = side.slice(side.indexOf('const VOICE_STYLE = `'), side.indexOf('`;', side.indexOf('const VOICE_STYLE = `')));

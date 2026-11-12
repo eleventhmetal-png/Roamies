@@ -68,7 +68,7 @@ try {
 // The window only reads: opening it or going back mid-reply must not save or fold the conversation under the reply.
 {
   const { readFileSync } = await import('node:fs');
-  const side = readFileSync(new URL('../sidekick.mjs', import.meta.url), 'utf8');
+  const side = readFileSync(new URL('../sidekick.mjs', import.meta.url), 'utf8').replace(/\r\n/g, '\n'); // Windows checks out CRLF
   const fn = side.slice(side.indexOf('function convoMessages()'), side.indexOf('\n}\n', side.indexOf('function convoMessages()')));
   assert.ok(fn.length > 0 && !/syncSession|saveSession|applyPendingFold/.test(fn), 'convoMessages never saves or folds');
 }

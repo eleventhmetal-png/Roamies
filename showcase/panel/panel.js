@@ -14,7 +14,7 @@
   const act = (id, away = false) => { if (away) hide(); send({ type: 'menu', id }); };
 
   let state = null, tab = 'home', deferred = false;
-  // What's open in the panel itself: a key field (provider id or 'fish'), the row action waiting for its
+  // What's open in the panel itself: a key field (provider id, 'fish' or 'gemini'), the row action waiting for its
   // Confirm, each long list's page (pg) and how many rows fit on one (per, measured), Memory's tab and its search.
   const ui = { key: null, kind: {}, arm: null, pg: {}, per: {}, mtab: 'facts', q: '', bindShown: new Set() };
   let armTimer = 0;
@@ -36,6 +36,31 @@
   const link = (label, onclick, { k, danger, aria, disabled } = {}) =>
     el('button', { className: `link${danger ? ' danger' : ''}`, type: 'button', textContent: label, 'data-k': k, 'aria-label': aria, disabled, on: { click: onclick } });
   // A row's action, played out: the row steps out, then the action goes. Re-rendering brings the list in line.
+  // A block opening in place grows into its room and fades in; closing, the reverse. Marked with data-anim (its id).
+  const shown = (n) => !n.hidden && n.getClientRects().length > 0;
+  function grow(n, open) {
+    if (REDUCED.matches || !shown(n)) return Promise.resolve();
+    const h = n.offsetHeight, gap = parseFloat(getComputedStyle(n.parentElement).rowGap) || 0;
+    n.classList.remove('appear', 'vanish'); void n.offsetWidth; n.classList.add(open ? 'appear' : 'vanish');
+    const shut = { height: '0px', marginTop: `${-gap}px` }, full = { height: `${h}px`, marginTop: '0px' };
+    n.style.overflow = 'hidden';
+    return n.animate(open ? [shut, full] : [full, shut], { duration: open ? 200 : 160, easing: 'cubic-bezier(.2, .8, .2, 1)', fill: open ? 'none' : 'forwards' })
+      .finished.catch(() => {}).then(() => { n.style.overflow = ''; if (open) n.classList.remove('appear'); });
+  }
+  // Closes the open block `id` (animated), then runs then().
+  const shutBlock = (id, then) => { const n = document.querySelector(`.pane [data-anim="${CSS.escape(id)}"]`); return n && shown(n) ? grow(n, false).then(then) : then(); };
+  // The key field under a row: opens (closing another first), or closes if it's the one open.
+  function toggleKey(id) {
+    const prev = ui.key;
+    if (prev === id) return closeKey();
+    const open = () => { ui.key = id; render(`key-${id}`); };
+    return prev ? shutBlock(`key-${prev}`, open) : open();
+  }
+  function closeKey() {
+    const id = ui.key;
+    if (!id) return;
+    shutBlock(`key-${id}`, () => { if (ui.key === id) { ui.key = null; render(`addkey:${id}`); } });
+  }
   const leave = (from, id) => { from.closest('.item')?.classList.add('leaving'); setTimeout(() => act(id), REDUCED.matches ? 0 : 190); };
   // Asks first in the same spot: the first press turns it into Confirm (for 4 s), the second does it.
   const armed = (label, yes, k, id, aria) => {
@@ -49,6 +74,32 @@
     });
     return b;
   };
+  // A row's tick (done) or X (forget, drop) asks first, like Quit: pressed, it turns into Confirm in place while the
+  // row's other button steps aside; pressed again it goes, left alone for 4 s it goes back.
+  const PIX = {
+    tick: [[0, 3], [1, 4], [2, 5], [3, 4], [4, 3], [5, 2], [6, 1]],
+    x: [[0, 0], [1, 1], [2, 2], [3, 3], [4, 4], [5, 5], [6, 6], [6, 0], [5, 1], [4, 2], [2, 4], [1, 5], [0, 6]],
+  };
+  const pix = (name) => `<svg viewBox="0 0 14 14" width="14" height="14" shape-rendering="crispEdges" fill="currentColor">${PIX[name].map(([x, y]) => `<rect x="${x * 2}" y="${y * 2}" width="2" height="2"/>`).join('')}</svg>`;
+  // Asking, it has no tooltip: the word on it says what it does.
+  const armIcon = (b, on) => { b.setAttribute('aria-pressed', String(on)); b.setAttribute('aria-label', on ? `Confirm: ${b.dataset.aria}` : b.dataset.aria); if (on) b.removeAttribute('data-tip'); else b.dataset.tip = b.dataset.name; };
+  const calmIcons = () => { for (const o of document.querySelectorAll('.pane .ibtn[aria-pressed="true"]')) armIcon(o, false); };
+  function iconArmed(icon, tip, k, id, aria) {
+    const no = el('span', { className: 'no', 'aria-hidden': 'true' });
+    no.innerHTML = pix(icon);
+    const b = el('button', { className: `link ibtn${icon === 'x' ? ' danger' : ''}`, type: 'button', 'data-k': k, 'data-name': tip, 'data-aria': aria },
+      no, el('span', { className: 'yes', textContent: 'Confirm', 'aria-hidden': 'true' }));
+    armIcon(b, ui.arm === k);
+    b.addEventListener('click', () => {
+      if (ui.arm === k) { disarm(); return leave(b, id); }
+      const text = document.querySelector('.pane .arm[aria-pressed="true"]');
+      disarm(); calmIcons(); if (text) render(k);
+      const me = document.querySelector(`.pane [data-k="${CSS.escape(k)}"]`) ?? b;
+      ui.arm = k; armIcon(me, true); hideTip();
+      armTimer = setTimeout(() => { if (ui.arm !== k) return; ui.arm = null; const n = document.querySelector(`.pane [data-k="${CSS.escape(k)}"]`); if (n) armIcon(n, false); }, 4000);
+    });
+    return b;
+  }
   const group = (title, desc, n, ...kids) => el('div', { className: 'group' },
     el('div', { className: 'ghead' }, el('h2', {}, title, n != null ? el('span', { className: 'n', textContent: String(n) }) : null), desc ? el('p', { textContent: desc }) : null),
     ...kids);
@@ -115,6 +166,13 @@
       ? ` (${per100(c.promo.perM)} until ${new Date(Date.parse(c.promo.until) - 1).toLocaleDateString(undefined, { day: 'numeric', month: 'short', timeZone: 'America/Los_Angeles' })})` : '';
     return `$${c.perM} per million characters: about ${per100(c.perM)} per 100 replies${promo}. Billed to your Fish Audio account.`;
   };
+  // Gemini's two: a reply is about 12 seconds of speech, so 100 replies are about 20 minutes.
+  const GEMINI_WHY = { 'gemini-3.8-flash-lite-tts': 'Quick. Costs less.', 'gemini-3.8-flash-tts': 'Studio quality. Costs more.' };
+  const GEMINI_WHY_LONG = {
+    'gemini-3.8-flash-lite-tts': 'The quick, cheaper one: good for everyday replies.',
+    'gemini-3.8-flash-tts': "Google's best voice quality, with more feeling in it.",
+  };
+  const geminiPrice = (c) => `About $${(c.per10s * 120).toFixed(2)} per 100 replies, billed to your Google AI Studio account (it has a free tier).`;
   const where = () => (state?.os === 'mac' ? 'your Keychain' : state?.os === 'win' ? 'Windows, encrypted for your account' : state?.os === 'linux' ? 'your keyring' : 'this computer');
 
   // ---------------------------------------------------------------- header
@@ -122,16 +180,16 @@
     const s = state.status;
     $('led').className = `led${s.state === 'ready' ? ' on' : s.state === 'busy' ? ' busy' : ''}`;
     const now = $('now');
-    now.replaceChildren(el('b', { textContent: s.text }), state.model ? ` · ${state.model.name}` : s.state === 'off' ? (state.brain === 'ollama' ? ' · See the Model page' : ' · Sign in on the Model page') : '');
+    now.replaceChildren(el('b', { textContent: s.text }), state.model ? ` · ${state.model.name}` : s.state === 'off' ? ' · Sign in on the Model page' : '');
     now.title = now.textContent;
-    // A custom build says so beside its version, and where it updates from.
     $('ver').textContent = `v${state.version}`;
+    // A custom build says so under the name, and where it updates from.
     $('by').textContent = state.build ? 'By Ken Kai · custom build' : 'By Ken Kai';
     $('by').title = state.build ? `${state.build.name}: updates only from github.com/${state.build.repo}, never from the original Roamies` : '';
     updateButton();
     react();
     // The sidebar marks a page that needs you: no account to answer with.
-    mark('model', s.state === 'off' ? (state.brain === 'ollama' ? 'Ollama not ready' : 'not signed in') : null);
+    mark('model', s.state === 'off' ? 'not signed in' : null);
   }
   // One button for updates, updated in place (not rebuilt) so it keeps focus: Check for updates, then Update to x
   // (it downloads, installs and restarts), then Done. "Up to date" shows for a few seconds after a check.
@@ -244,7 +302,7 @@
   // The header's Roamie: your look, reacting to what's going on. A short line beside it when something changes.
   // The same size and detail as the look tiles (fewer dots than that and the faces turn to noise).
   const avatar = liveRoamie($('avatar'), 100, 74, { y: 0.55 });
-  const QUIPS = { classic: 'Classic me!', jarvis: 'At your service.', anime: 'Yay, hi hi!', sarah: 'Hey, nice to meet you!', adrian: "Alright, let's do this." };
+  const QUIPS = { classic: 'Classic me!', jarvis: 'At your service.', anime: 'Yay, hi hi!', sarah: 'Hey, nice to meet you!', adrian: "Alright, let's do this.", rita: 'Shall we get to work?' };
   let quipTimer = 0, seen = { look: null, update: null, opened: 0 };
   function quip(text, secs = 2.6) {
     const q = $('saying'), n = $('by');
@@ -353,10 +411,9 @@
   function factList() {
     const f = state.facts, q = ui.q.trim().toLowerCase();
     const hits = q ? f.filter((x) => x.text.toLowerCase().includes(q)) : f;
-    const { box, nav } = paged('facts', hits, (x) => el('li', { className: 'item' },
-      el('span', { className: 'mark', 'aria-hidden': 'true' }),
+    const { box, nav } = paged('facts', hits, (x) => el('li', { className: 'item mem' },
       el('span', { className: 'text', textContent: x.text, title: x.text }),
-      armed('Forget', 'Confirm', `forget:${x.id}`, `forget:${x.id}`, `Forget: ${x.text}`)), { label: 'What I remember', empty: q ? `No match for "${ui.q.trim()}".` : EMPTY, id: 'facts-box' });
+      el('span', { className: 'row-btns icons' }, iconArmed('x', 'Forget', `forget:${x.id}`, `forget:${x.id}`, `Forget: ${x.text}`))), { label: 'What I remember', empty: q ? `No match for "${ui.q.trim()}".` : EMPTY, id: 'facts-box' });
     // Search once there's more than a page: it looks through all of them, and the pages follow the matches.
     const search = f.length > (ui.per.facts ?? 8) || q ? el('div', { className: 'find' }, el('span', { className: 'px field' },
       el('input', { type: 'search', id: 'find-facts', value: ui.q, placeholder: `Search ${f.length} memories`, 'aria-label': 'Search what I remember', autocomplete: 'off', spellcheck: false,
@@ -376,12 +433,11 @@
     if (fit()) refreshFacts();
   }
   function commitList() {
-    const { box, nav } = paged('commits', state.commitments, (x) => el('li', { className: 'item' },
-      el('span', { className: 'mark', 'aria-hidden': 'true' }),
+    const { box, nav } = paged('commits', state.commitments, (x) => el('li', { className: 'item mem' },
       el('span', { className: 'text', title: x.text }, x.text, x.when ? el('small', { className: x.overdue ? 'late' : '', textContent: x.overdue ? `Overdue · ${x.when}` : x.when }) : null),
-      el('span', { className: 'row-btns' },
-        link('Done', (e) => leave(e.currentTarget, `done:${x.id}`), { k: `done:${x.id}`, aria: `Done: ${x.text}` }),
-        armed('Drop', 'Confirm', `drop:${x.id}`, `drop:${x.id}`, `Drop: ${x.text}`))), { label: 'Commitments' });
+      el('span', { className: 'row-btns icons' },
+        iconArmed('tick', 'Done', `done:${x.id}`, `done:${x.id}`, `Done: ${x.text}`),
+        iconArmed('x', 'Drop', `drop:${x.id}`, `drop:${x.id}`, `Drop: ${x.text}`))), { label: 'Commitments' });
     const n = state.commitments.length;
     return [el('div', { className: 'group paged', role: 'tabpanel', id: 'mem-panel', 'aria-labelledby': 'tab-commits' }, box), foot(n ? el('p', { className: 'usage', textContent: `${n} open` }) : null, nav)];
   }
@@ -389,52 +445,30 @@
   const refresh = (focusKey) => (tab === 'memory' && ui.mtab === 'facts' && document.activeElement?.id === 'find-facts' ? refreshFacts() : render(focusKey));
 
   // ---------------------------------------------------------------- Settings
-  // A masked key field that opens in place. id: a provider, or 'fish'. kinds: the kinds of key it takes
+  // A masked key field that opens in place. id: a provider, or a voice service ('fish', 'gemini'). kinds: the kinds of key it takes
   // (Kimi and Xiaomi: a plan key or a pay-per-token key), picked above the field; onsave gets the kind's id.
   function keyForm(id, label, onsave, kinds = null) {
     const kind = kinds?.find((x) => x.id === ui.kind[id]) ?? kinds?.[0];
     const name = kind?.label ?? label;
     const input = el('input', { type: 'password', id: `key-${id}`, autocomplete: 'off', spellcheck: false, placeholder: `${name} key`, 'aria-label': `${name} API key`, maxLength: 1000 });
-    const save = () => { const v = input.value.trim(); if (!v) return input.focus(); onsave(v, kind?.id); input.value = ''; ui.key = null; render(); };
-    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') save(); else if (e.key === 'Escape') { e.stopPropagation(); ui.key = null; render(`addkey:${id}`); } });
-    const row = el('div', { className: 'keyform', hidden: ui.key !== id }, el('span', { className: 'px field' }, input), btn('Save', save, { k: `save:${id}` }));
+    const save = () => { const v = input.value.trim(); if (!v) return input.focus(); onsave(v, kind?.id); input.value = ''; closeKey(); };
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') save(); else if (e.key === 'Escape') { e.stopPropagation(); closeKey(); } });
+    const row = el('div', { className: 'keyform', hidden: ui.key !== id, 'data-anim': `key-${id}` }, el('span', { className: 'px field' }, input), btn('Save', save, { k: `save:${id}` }));
     if (!kinds) return row;
-    row.hidden = false;
-    return el('div', { className: 'keykinds', hidden: ui.key !== id },
+    row.hidden = false; delete row.dataset.anim;
+    return el('div', { className: 'keykinds', hidden: ui.key !== id, 'data-anim': `key-${id}` },
       picks(`${label} key type`, kinds.map((x) => [x.id, x.label]), kind.id, (v) => { ui.kind[id] = v; render(`kind-${id}:${v}`); }, `kind-${id}`,
         Object.fromEntries(kinds.map((x) => [x.id, x.billing]))),
       row);
   }
 
   const signIn = (p) => link('Sign in', () => act(`login:${p.id}`), { k: `login:${p.id}`, aria: `Sign in to ${p.label}`, disabled: !!state.loggingIn });
-  const addKey = (p) => link(ui.key === p.id ? 'Cancel' : 'Add key', () => { ui.key = ui.key === p.id ? null : p.id; render(ui.key ? `key-${p.id}` : `addkey:${p.id}`); }, { k: `addkey:${p.id}`, aria: `Add ${p.label} API key` });
+  const connect = (p) => link('Connect', () => act('local:connect'), { k: 'local:connect', aria: `Connect ${p.label}` });
+  const addKey = (p) => link(ui.key === p.id ? 'Cancel' : 'Add key', () => toggleKey(p.id), { k: `addkey:${p.id}`, aria: `Add ${p.label} API key` });
 
-  // Ollama on this computer: running or exactly why not, its models that can use tools, Check again, and warnings
-  // (the picked model is gone, or Ollama gives it too small a context).
-  function ollamaRows() {
-    const o = state.ollama ?? { checking: true };
-    const n = o.models?.length ?? 0;
-    const status = o.checking ? 'Checking Ollama…' : o.ok ? `Running · ${n} model${n === 1 ? '' : 's'} that can use tools` : o.message || "Ollama isn't available.";
-    const ctx = (m) => (m.context ? ` · ${Math.round(m.context / 1024)}K context` : '');
-    const select = o.ok ? el('span', { className: 'px field select' },
-      el('select', { 'aria-label': 'Ollama model', 'data-k': 'ollamamodel', on: { change: (e) => act(`model:local:${e.target.value}`) } },
-        o.model ? null : el('option', { value: '', textContent: 'Pick a model', disabled: true, selected: true }),
-        o.models.map((m) => el('option', { value: m.id, textContent: `${m.name}${ctx(m)}`, selected: m.id === o.model })))) : null;
-    return [
-      el('div', { className: 'setting' },
-        el('span', {}, 'Ollama', el('small', { className: o.ok || o.checking ? '' : 'bad', textContent: status, role: o.ok || o.checking ? null : 'alert' })),
-        el('span', { className: 'row-btns' }, link('Check again', () => act('ollama_check'), { k: 'ollama_check', aria: 'Check Ollama again' }))),
-      select ? el('p', { className: 'sub', textContent: 'Model' }) : null,
-      select,
-      o.gone ? el('p', { className: 'why late wrap', role: 'alert', textContent: o.gone }) : null,
-      o.warn ? el('p', { className: 'why late wrap', role: 'alert', textContent: o.warn }) : null,
-      o.ok && o.noTools?.length ? el('p', { className: 'why wrap', textContent: `Not listed, as they can't use tools: ${o.noTools.join(', ')}` }) : null,
-    ];
-  }
-  const BRAIN_TIPS = {
-    cloud: 'A model from an AI provider you sign in to below, billed by that provider or included in your plan.',
-    ollama: 'A model in the Ollama app on this computer. Free, and nothing leaves your computer. It needs a model that can use tools.',
-  };
+  // A connected account's key: replace it (saving under the same kind overwrites it), or add one next to a sign-in.
+  const changeKey = (p) => link(ui.key === p.id ? 'Cancel' : p.keySaved ? 'Change key' : 'Add key', () => toggleKey(p.id),
+    { k: `addkey:${p.id}`, aria: `${p.keySaved ? 'Change the' : 'Add a'} ${p.label} API key` });
 
   // How deep replies go (Quick, Conversation, Work) and how hard the model thinks first: only the levels this
   // model supports are offered. The same two settings are in the conversation window.
@@ -450,9 +484,6 @@
 
   // Settings, one page per concern.
   function modelPage() {
-    const local = state.brain === 'ollama';
-    const brain = picks('Brain', [['cloud', 'Cloud'], ['ollama', 'Ollama (local)']], local ? 'ollama' : 'cloud', (x) => act(`brain:${x}`), 'brain', BRAIN_TIPS);
-    if (local) return [group('Model', 'Which AI answers you.', null, brain, ollamaRows()), repliesGroup()];
     const on = state.providers.filter((p) => p.on);
     const model = state.model ? `${state.model.provider}:${state.model.id}` : '';
     const select = on.length ? el('span', { className: 'px field select' },
@@ -462,16 +493,22 @@
     const accounts = state.providers.filter((p) => p.on || p.method);
     const { box, nav } = paged('accounts', accounts, (p) => el('li', { className: `acct${ui.key === p.id ? ' open' : ''}` },
       el('div', { className: 'setting' },
-        el('span', {}, p.label),
-        p.on ? el('span', { className: 'ok' }, el('span', { className: 'led on', 'aria-hidden': 'true' }), 'Signed in')
+        // Connected: a lit dot by the name, its word in a tooltip (and for screen readers).
+        el('span', { className: 'acct-name' }, p.label, p.on ? el('span', { className: 'led on', role: 'img', 'aria-label': p.method === 'local' ? 'Connected' : 'Signed in', 'data-tip': p.method === 'local' ? 'Connected' : 'Signed in' }) : null),
+        p.on ? el('span', { className: 'row-btns' },
+          p.key ? changeKey(p) : null,
+          ui.key === p.id ? null : armed(p.signedIn && !p.keySaved ? 'Sign out' : 'Remove', 'Confirm', `signout:${p.id}`, `signout:${p.id}`, `Remove ${p.label} from Roamies`))
           : state.loggingIn === p.id ? el('span', { className: 'waiting', textContent: 'Signing in…' })
+          : p.method === 'local' ? connect(p)
           : p.method === 'oauth' ? (p.key ? el('span', { className: 'links' }, signIn(p), addKey(p)) : signIn(p))
           : addKey(p)),
-      p.on || !(p.method === 'key' || p.key) ? null : keyForm(p.id, p.label, (key, kind) => send({ type: 'panel_key', provider: p.id, kind, key }), p.kinds)),
+      // Ollama: why its models aren't in the Model menu (not running, or none can see images).
+      p.note ? el('p', { className: 'empty note', textContent: p.note }) : null,
+      p.method === 'key' || p.key ? keyForm(p.id, p.label, (key, kind) => send({ type: 'panel_key', provider: p.id, kind, key }), p.kinds) : null),
     { label: 'Accounts', pin: accounts.findIndex((p) => p.id === ui.key) });
     return [
-      group('Model', 'Which AI answers you.', null, brain,
-        select ? [el('p', { className: 'sub', textContent: 'Model' }), select] : el('p', { className: 'empty', textContent: 'Sign in to an account below first.' })),
+      group('Model', 'Which AI answers you.', null,
+        select ?? el('p', { className: 'empty', textContent: 'Sign in to an account below first.' })),
       repliesGroup(),
       el('div', { className: 'group paged' }, el('div', { className: 'ghead' }, el('h2', { textContent: 'Accounts' }), el('p', { textContent: 'Sign in to use their models.' })), box),
       foot(null, nav),
@@ -515,44 +552,64 @@
     const vs = state.studio ?? { checking: true };
     const status = vs.checking ? 'Checking VoiceStudio…' : vs.ok ? `Connected${vs.engine ? ` · ${vs.engine}` : ''}` : vs.message || "VoiceStudio isn't available.";
     const voices = vs.voices ?? [];
-    const select = vs.ok ? el('span', { className: 'px field select' },
-      el('select', { 'aria-label': 'VoiceStudio voice', 'data-k': 'studiovoice', on: { change: (e) => act(`studiovoice:${e.target.value}`) } },
-        el('option', { value: 'default', textContent: 'Engine default', selected: !vs.voice || !voices.some((x) => x.id === vs.voice) }),
-        voices.map((x) => el('option', { value: x.id, textContent: x.name, selected: x.id === vs.voice })))) : null;
     return [
       el('div', { className: 'setting' },
         el('span', {}, 'VoiceStudio', el('small', { className: vs.ok || vs.checking ? '' : 'bad', textContent: status, role: vs.ok || vs.checking ? null : 'alert' })),
         el('span', { className: 'row-btns' }, link('Check again', () => act('voicestudio_check'), { k: 'voicestudio_check', aria: 'Check VoiceStudio again' }))),
-      select ? el('p', { className: 'sub', textContent: 'Voice' }) : null,
-      select,
-      vs.ok && !voices.length ? el('p', { className: 'why', textContent: 'Save a voice in VoiceStudio (clone or design one) to pick it here.' }) : null,
+      vs.ok ? el('div', { className: 'reveal', 'data-anim': 'studio-voice' },
+        el('p', { className: 'sub', textContent: `Voice for ${state.name}` }),
+        el('span', { className: 'px field select' },
+          el('select', { 'aria-label': 'VoiceStudio voice', 'data-k': 'studiovoice', on: { change: (e) => act(`studiovoice:${e.target.value}`) } },
+            el('option', { value: 'default', textContent: 'Engine default', selected: !vs.voice || !voices.some((x) => x.id === vs.voice) }),
+            voices.map((x) => el('option', { value: x.id, textContent: x.name, selected: x.id === vs.voice })))),
+        voices.length ? null : el('p', { className: 'why', textContent: 'Save a voice in VoiceStudio (clone or design one) to pick it here.' }),
+      ) : null,
     ];
   }
+  const TTS_NAMES = { fish: 'Fish Audio', gemini: 'Gemini', voicestudio: 'VoiceStudio' };
   function voicePage() {
     const v = state.voice;
-    const local = state.voiceProvider === 'voicestudio';
+    // The service that speaks, each with its own key: Fish Audio's voice is the look's and it has models to pick
+    // from; Gemini has a list of voices and two models; VoiceStudio runs on this computer and needs no key.
+    const tts = TTS_NAMES[state.tts] ? state.tts : 'fish', T = TTS_NAMES[tts], local = tts === 'voicestudio', hasKey = local || !!state[`${tts}Key`];
+    // Gemini can speak with the key the AI already has (the Model page), until the voice gets one of its own.
+    const shared = tts === 'gemini' && hasKey && !!state.geminiShared;
     return [
       group('Spoken replies', 'Hear me as well as read me.', null,
         picks('Replies', [['text', 'Text only'], ['voice', 'Voice and text']], state.replies, (x) => {
-          if (x === 'voice' && !local && !state.fishKey) { ui.key = 'fish'; render('key-fish'); note('Add a Fish Audio key to hear me talk.'); return; }
+          if (x === 'voice' && !hasKey) { ui.key = tts; render(`key-${tts}`); note(`Add a ${T} key to hear me talk.`); return; }
           act(`replies:${x}`);
         }, 'replies'),
         el('p', { className: 'sub', textContent: 'Voice provider' }),
-        picks('Voice provider', [['fish', 'Fish Audio'], ['voicestudio', 'VoiceStudio (local)']], local ? 'voicestudio' : 'fish', (x) => act(`voiceprovider:${x}`), 'voiceprovider',
-          { fish: 'Cloud voices, billed to your own Fish Audio account.', voicestudio: 'The VoiceStudio app on this computer, in the engine and voices you set up there. Free, and nothing leaves your computer.' }),
-        local ? studioRows() : null,
-        !local && state.replies === 'voice' && state.fishModels?.length ? [
+        picks('Voice provider', Object.entries(TTS_NAMES), tts, (x) => {
+          if (x !== 'voicestudio' && !state[`${x}Key`]) { ui.key = x; note(`Add a ${TTS_NAMES[x]} key to hear me talk.`); } // its key field opens with it
+          act(`tts:${x}`);
+        }, 'tts', { fish: 'A voice for each look, acted out with feeling. Billed to your Fish Audio account.', gemini: "Google's voices: pick one of 30. Billed to your Google AI Studio account.", voicestudio: 'The free VoiceStudio app on this computer, in the engine and voices you set up there. Nothing leaves your computer.' }),
+        local ? el('div', { className: 'reveal', 'data-anim': 'studio' }, studioRows()) : null,
+        tts === 'gemini' && hasKey && state.geminiVoices?.length ? el('div', { className: 'reveal', 'data-anim': 'gemini-voice' },
+          el('p', { className: 'sub', textContent: `Voice for ${state.name}` }),
+          el('span', { className: 'px field select' },
+            el('select', { 'aria-label': 'Gemini voice', 'data-k': 'geminivoice', on: { change: (e) => act(`geminivoice:${e.target.value}`) } },
+              state.geminiVoices.map((g) => el('option', { value: g.id, textContent: `${g.id} · ${g.style}`, selected: g.id === state.geminiVoice })))),
+        ) : null,
+        tts === 'gemini' && hasKey && state.geminiModels?.length ? el('div', { className: 'reveal', 'data-anim': 'gemini-model' },
+          el('p', { className: 'sub', textContent: 'Voice model' }),
+          picks('Voice model', state.geminiModels.map((c) => [c.id, c.name]), state.geminiModel, (x) => act(`geminimodel:${x}`), 'geminimodel',
+            Object.fromEntries(state.geminiModels.map((c) => [c.id, `${GEMINI_WHY_LONG[c.id] ?? ''} ${geminiPrice(c)}`.trim()]))),
+          el('p', { className: 'why', textContent: GEMINI_WHY[state.geminiModel] ?? '' }),
+        ) : null,
+        tts === 'fish' && state.replies === 'voice' && state.fishModels?.length ? el('div', { className: 'reveal', 'data-anim': 'fish-model' },
           el('p', { className: 'sub', textContent: 'Voice model' }),
           picks('Voice model', state.fishModels.map((c) => [c.id, c.name]), state.fishModel, (x) => act(`fishmodel:${x}`), 'fishmodel',
             Object.fromEntries(state.fishModels.map((c) => [c.id, `${WHY_LONG[c.id] ?? ''} ${price(c)}`.trim()]))),
           el('p', { className: `why${state.fishFree ? ' late' : ''}`, textContent: state.fishFree ? "No credit left, so it's on Fish's free tier" : WHY[state.fishModel] ?? '' }),
-        ] : null,
+        ) : null,
         local ? null : el('div', { className: 'setting' },
-          el('span', {}, 'Fish Audio key', el('small', { textContent: state.fishKey ? `Saved in ${where()}` : 'Needed for spoken replies' })),
+          el('span', {}, `${T} key`, el('small', { textContent: shared ? 'Shared with the Model page' : hasKey ? `Saved in ${where()}` : 'Needed for spoken replies' })),
           el('span', { className: 'row-btns' },
-            link(ui.key === 'fish' ? 'Cancel' : state.fishKey ? 'Change' : 'Add', () => { ui.key = ui.key === 'fish' ? null : 'fish'; render(ui.key ? 'key-fish' : 'addkey:fish'); }, { k: 'addkey:fish', aria: state.fishKey ? 'Change the Fish Audio key' : 'Add a Fish Audio key' }),
-            state.fishKey && ui.key !== 'fish' ? armed('Remove', 'Confirm', 'fishkey-remove', 'fishkey_remove', 'Remove the Fish Audio key') : null)),
-        local ? null : keyForm('fish', 'Fish Audio', (key) => send({ type: 'panel_fishkey', key }))),
+            link(ui.key === tts ? 'Cancel' : shared ? 'Use another' : hasKey ? 'Change' : 'Add', () => toggleKey(tts), { k: `addkey:${tts}`, aria: hasKey ? `Change the ${T} key` : `Add a ${T} key` }),
+            hasKey && !shared && ui.key !== tts ? armed('Remove', 'Confirm', `${tts}key-remove`, `${tts}key_remove`, `Remove the ${T} key`) : null)),
+        local ? null : keyForm(tts, T, (key) => send({ type: `panel_${tts}key`, key }))),
       v ? group('Talking to me', 'Speak instead of typing.', null,
         toggle('Voice control', v.download
           ? (v.download.status === 'downloading' ? `Downloading the voice model… ${v.download.pct}%` : v.download.status === 'error' ? 'The download failed' : `Needs a ${v.download.size} download`)
@@ -635,11 +692,14 @@
     const scroll = $('pane-' + tab).closest('.body').scrollTop;
     head();
     const pane = $(`pane-${tab}`);
+    const same = render.tab === tab; render.tab = tab;
+    const before = new Set([...pane.querySelectorAll('[data-anim]')].filter(shown).map((n) => n.dataset.anim));
     const draw = () => { pane.replaceChildren(...PANES[tab]().flat().filter(Boolean)); pane.classList.toggle('paged', !!pane.querySelector('.pagebox')); };
     draw();
     // Lists show as many rows as fit: drawn once to measure, again if a different number fits.
     if (fit()) draw();
     pane.closest('.body').scrollTop = scroll;
+    if (same && !animate) for (const n of pane.querySelectorAll('[data-anim]')) if (shown(n) && !before.has(n.dataset.anim)) grow(n, true);
     // Rows fill in one after another (a page's worth; the rest come with the last), only when it opens or
     // the tab changes, never on the updates that arrive while it's open.
     pane.classList.toggle('enter', animate);
@@ -698,7 +758,7 @@
   // Radio groups: arrows move the choice, like the setup guide's.
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && !e.defaultPrevented && tipFor) { e.preventDefault(); hideTip(); return; }
-    if (e.key === 'Escape' && !e.defaultPrevented) { const was = ui.arm; if (ui.key || disarm()) { ui.key = null; render(was ?? undefined); } else hide(); return; }
+    if (e.key === 'Escape' && !e.defaultPrevented) { const was = ui.arm; if (ui.key) closeKey(); else if (disarm()) render(was ?? undefined); else hide(); return; }
     const tl = e.target.closest?.('[role="tablist"]');
     if (tl && (e.key === 'ArrowRight' || e.key === 'ArrowLeft')) {
       e.preventDefault();
@@ -747,7 +807,10 @@
   // A click anywhere else puts an armed Confirm back.
   document.addEventListener('pointerdown', (e) => {
     if (!e.target.closest?.('#head-quit')) unarmQuit();
-    if (ui.arm && !e.target.closest?.('.arm[aria-pressed="true"]')) { disarm(); render(); }
+    if (ui.arm && !e.target.closest?.('.arm[aria-pressed="true"], .ibtn[aria-pressed="true"]')) {
+      const text = document.querySelector('.pane .arm[aria-pressed="true"]');
+      disarm(); calmIcons(); if (text) render(); // a tick or X goes back in place, so it can ease back
+    }
   }, true);
 
   window.__panel = (m) => {
@@ -755,6 +818,7 @@
       const first = !state; state = m.state;
       if (ui.arm && !document.querySelector(`[data-k="${CSS.escape(ui.arm)}"]`)) ui.arm = null;
       render(null, first);
+      if (m.state.tab) show(m.state.tab, true); // opened for a reason (asked with nothing signed in: the Model page)
     }
     else if (m.kind === 'note') note(m.text, m.bad, m.copy);
     else if (m.kind === 'copied' && m.which === 'problem') note(m.ok ? 'Copied the error details. Paste them into your report.' : "Couldn't copy the error details. Try Save diagnostics.", !m.ok);
@@ -778,12 +842,13 @@
       status: { state: 'ready', text: 'Ready' }, busy: false, canNew: true,
       model: { provider: 'anthropic', id: 'claude-haiku-5-5', name: 'Claude Haiku 5.5', providerLabel: 'Anthropic' },
       providers: [
-        { id: 'anthropic', label: 'Anthropic', on: true, method: 'oauth', models: [{ id: 'claude-haiku-5-5', name: 'Claude Haiku 5.5' }, { id: 'claude-sonnet-5', name: 'Claude Sonnet 5' }] },
+        { id: 'anthropic', label: 'Anthropic', on: true, method: 'oauth', key: true, signedIn: true, models: [{ id: 'claude-haiku-5-5', name: 'Claude Haiku 5.5' }, { id: 'claude-sonnet-5', name: 'Claude Sonnet 5' }] },
         { id: 'openai', label: 'OpenAI', on: false, method: 'oauth', key: true, models: [] },
-        { id: 'gemini', label: 'Gemini', on: false, method: 'key', models: [] },
+        { id: 'gemini', label: 'Gemini', on: true, method: 'key', key: true, keySaved: true, models: [{ id: 'gemini-3.8-flash', name: 'Gemini 3.8 Flash' }] },
         { id: 'moonshot', label: 'Kimi (Moonshot)', on: false, method: 'key', models: [], kinds: [
           { id: 'kimi-code', label: 'Kimi Code', billing: 'Uses your Kimi Code plan. Create the key in the Kimi Code Console.' },
           { id: 'moonshot', label: 'Moonshot', billing: 'Pay-per-token from platform.moonshot.ai.' }] },
+        { id: 'local', label: 'Ollama (on this computer)', on: false, method: 'local', models: [] },
         ...['xAI', 'GLM (Z.ai)', 'MiniMax', 'Xiaomi', 'DeepSeek', 'Sakana', 'OpenRouter', 'Hugging Face'].map((label) => ({ id: label.toLowerCase().replace(/\W/g, ''), label, on: false, method: 'key', models: [] })),
       ],
       loggingIn: null,
@@ -798,9 +863,15 @@
       usage: { requests: 14, tokens: 31240 },
       facts: [{ id: 'f1', text: 'Prefers short answers in the morning' }, { id: 'f2', text: 'Working on the Roamies 1.0 launch, due end of month' }, { id: 'f3', text: 'Has a cat called Miso' }],
       commitments: [{ id: 'c1', text: 'Send the launch email', when: 'Fri 7 Nov, 10:00', overdue: false }, { id: 'c2', text: 'Book the dentist', when: 'Mon 3 Nov, 09:00', overdue: true }],
-      name: 'Roamie', look: 'classic', looks: [['classic', 'Roamie'], ['jarvis', 'JARVIS'], ['anime', 'Anime Girl'], ['sarah', 'Sarah'], ['adrian', 'Adrian']],
+      name: 'Roamie', look: 'classic', looks: [['classic', 'Roamie'], ['jarvis', 'JARVIS'], ['anime', 'Anime Girl'], ['sarah', 'Sarah'], ['adrian', 'Adrian'], ['rita', 'Rita X']],
       size: 'default', sizes: [['default', 'Default'], ['small', 'Small'], ['cursor', 'Cursor']],
       replies: 'voice', fishKey: true, fishModel: 'drama-3', fishFree: false,
+      // ?tts=gemini: Gemini as the voice, its key saved.
+      tts: new URLSearchParams(location.search).get('tts') === 'gemini' ? 'gemini' : 'fish', geminiKey: new URLSearchParams(location.search).get('tts') === 'gemini', geminiVoice: 'Kore',
+      geminiVoices: [['Zephyr', 'Bright'], ['Puck', 'Upbeat'], ['Charon', 'Informative'], ['Kore', 'Firm']].map(([id, style]) => ({ id, style })),
+      // &shared: speaking with the AI's Gemini key, none saved for the voice.
+      geminiShared: new URLSearchParams(location.search).has('shared'), geminiModel: 'gemini-3.8-flash-lite-tts',
+      geminiModels: [{ id: 'gemini-3.8-flash-lite-tts', name: 'Flash Lite', per10s: 0.0015 }, { id: 'gemini-3.8-flash-tts', name: 'Flash', per10s: 0.00225 }],
       fishModels: [{ id: 'drama-3', name: 'Drama 3', perM: 50, promo: { perM: 10, until: '2026-12-01T08:00:00Z' } }, { id: 's2.1-pro', name: 'S2.1 Pro', perM: 15 }],
       voice: { on: true, keys: '⌃⌥', ready: true, mac: true, mute: true, wakeWord: false, download: null }, askKeys: '⌥⌘',
       sound: true, actions: false, login: { on: true },
@@ -826,23 +897,10 @@
     const STUDIO = {
       on: { ok: true, engine: 'OmniVoice', voices: [{ id: 'a642d572', name: 'Ben' }, { id: 'fa08aff1', name: 'British · Female · Young Adult · High' }], voice: 'fa08aff1' },
       empty: { ok: true, engine: 'KittenTTS', voices: [], voice: null },
-      off: { ok: false, reason: 'offline', message: "VoiceStudio isn't running. Open VoiceStudio, then press Check again." },
+      off: { ok: false, reason: 'offline', message: 'Run VoiceStudio first.' },
       engine: { ok: false, reason: 'engine', message: "VoiceStudio's voice engine isn't ready (CosyVoice): not installed. Pick or install an engine in VoiceStudio, then press Check again." },
     };
-    if (q.has('studio')) Object.assign(s, { voiceProvider: 'voicestudio', studio: STUDIO[q.get('studio')] ?? STUDIO.on });
-    // ?ollama: Ollama is the brain (?ollama=off: it isn't running; =notools: no model can use tools; =small: the
-    // picked model's context is too small; =empty: no models at all).
-    const OLLAMA = {
-      on: { ok: true, models: [{ id: 'local/ollama/qwen3:8b', name: 'qwen3:8b', context: 32768 }, { id: 'local/ollama/gpt-oss:20b', name: 'gpt-oss:20b', context: null }], model: 'local/ollama/qwen3:8b', noTools: ['gemma3:4b'] },
-      small: { ok: true, models: [{ id: 'local/ollama/qwen3:8b', name: 'qwen3:8b', context: 4096 }], model: 'local/ollama/qwen3:8b', noTools: [], warn: "Ollama runs qwen3:8b with a 4K context, too small for my instructions and tools, so it will forget them. Set the context length in Ollama's settings to 32K or more, then press Check again." },
-      off: { ok: false, message: "Ollama isn't running. Open Ollama, then press Check again on the Model page.", models: [], noTools: [] },
-      notools: { ok: false, message: "None of your Ollama models can use tools, and I need tools to do things for you. Pull one that can, like qwen3 or gpt-oss, then press Check again.", models: [], noTools: ['gemma3:4b'] },
-      empty: { ok: false, message: 'Ollama has no models yet. Pull one that can use tools, like qwen3 or gpt-oss (ollama pull qwen3), then press Check again.', models: [], noTools: [] },
-    };
-    const ollamaState = (o) => ({ brain: 'ollama', ollama: o, model: o.ok ? { provider: 'local', id: o.model, name: o.model.split('/').pop(), providerLabel: 'Ollama' } : null, status: o.ok ? { state: 'ready', text: 'Ready' } : { state: 'off', text: 'Ollama not ready' } });
-    const cloudModel = s.model;
-    s.brain = 'cloud';
-    if (q.has('ollama')) Object.assign(s, ollamaState(OLLAMA[q.get('ollama')] ?? OLLAMA.on));
+    if (q.has('studio')) Object.assign(s, { tts: 'voicestudio', studio: STUDIO[q.get('studio')] ?? STUDIO.on });
     if (q.has('uptodate')) s.update.result = { ok: true, at: Date.now() + 60e3 };
     if (q.get('tab')) setTimeout(() => { if (q.get('mtab')) ui.mtab = q.get('mtab'); show(q.get('tab')); }, 0);
     setTimeout(() => window.__panel({ kind: 'state', state: s }), 0);
@@ -853,9 +911,7 @@
       if (args.msg?.type === 'copy_problem') setTimeout(() => window.__panel({ kind: 'copied', which: 'problem', ok: q.get('copy') !== 'fail' }), 150);
       const id = args.msg?.id ?? '';
       if (id.startsWith('size:')) { s.size = id.slice(5); setTimeout(() => window.__panel({ kind: 'state', state: s }), 120); }
-      if (id.startsWith('brain:')) { Object.assign(s, id === 'brain:ollama' ? ollamaState(OLLAMA[q.get('ollama')] ?? OLLAMA.on) : { brain: 'cloud', ollama: null, model: cloudModel, status: { state: 'ready', text: 'Ready' } }); setTimeout(() => window.__panel({ kind: 'state', state: s }), 120); }
-      if (id.startsWith('model:local:') && s.ollama) { s.ollama.model = id.slice(12); s.model = { ...s.model, id: s.ollama.model, name: s.ollama.model.split('/').pop() }; setTimeout(() => window.__panel({ kind: 'state', state: s }), 120); }
-      if (id.startsWith('voiceprovider:')) { s.voiceProvider = id.slice(14); s.studio = s.voiceProvider === 'voicestudio' ? STUDIO[q.get('studio')] ?? STUDIO.on : null; setTimeout(() => window.__panel({ kind: 'state', state: s }), 120); }
+      if (id.startsWith('tts:')) { s.tts = id.slice(4); s.studio = s.tts === 'voicestudio' ? STUDIO[q.get('studio')] ?? STUDIO.on : null; setTimeout(() => window.__panel({ kind: 'state', state: s }), 120); }
       if (id.startsWith('studiovoice:') && s.studio) { s.studio.voice = id.slice(12) === 'default' ? null : id.slice(12); setTimeout(() => window.__panel({ kind: 'state', state: s }), 120); }
       if (id.startsWith('look:')) { s.look = id.slice(5); s.name = s.looks.find(([v]) => v === s.look)?.[1] ?? s.name; setTimeout(() => window.__panel({ kind: 'state', state: s }), 120); }
       return null;
